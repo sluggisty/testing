@@ -9,14 +9,17 @@ help:
 	@echo "=============================="
 	@echo ""
 	@echo "Setup:"
-	@echo "  make setup      - Install dependencies and download base image"
+	@echo "  make setup           - Install dependencies and download base image (Fedora 42)"
+	@echo "  make base-images-all - Download base images for all Fedora versions"
 	@echo ""
 	@echo "VM Management:"
-	@echo "  make create     - Create 10 test VMs"
-	@echo "  make destroy    - Remove all test VMs"
-	@echo "  make start      - Start all VMs"
-	@echo "  make stop       - Stop all VMs"
-	@echo "  make status     - Show VM status"
+	@echo "  make create          - Create 5 test VMs (Fedora 42, default)"
+	@echo "  make create-all      - Create VMs for all Fedora versions (42-33)"
+	@echo "  make list-versions   - List available Fedora versions"
+	@echo "  make destroy         - Remove all test VMs"
+	@echo "  make start           - Start all VMs"
+	@echo "  make stop            - Stop all VMs"
+	@echo "  make status          - Show VM status"
 	@echo ""
 	@echo "Snail Core:"
 	@echo "  make run        - Run snail on all VMs"
@@ -34,11 +37,23 @@ deps:
 	pip install -r requirements.txt
 
 base-image:
-	./scripts/setup-base-image.sh
+	./scripts/setup-base-image.sh --version 42
+
+base-images-all:
+	@for v in 42 41 40 39 38 37 36 35 34 33; do \
+		echo "Downloading Fedora $$v..."; \
+		./scripts/setup-base-image.sh --version $$v || true; \
+	done
 
 # VM management
 create:
 	./harness.py create
+
+create-all:
+	./harness.py create --versions 42,41,40,39,38,37,36,35,34,33
+
+list-versions:
+	./harness.py list-versions
 
 destroy:
 	./harness.py destroy --force

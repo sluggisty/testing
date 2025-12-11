@@ -25,7 +25,8 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Get list of test VMs
 get_test_vms() {
-    sudo virsh list --all --name | grep "^${VM_PREFIX}-" || true
+    # Match pattern: snail-test-<version>-<number>
+    sudo virsh list --all --name | grep "^${VM_PREFIX}-" | grep -E "^${VM_PREFIX}-[0-9]+-[0-9]+$" || true
 }
 
 # Destroy a single VM

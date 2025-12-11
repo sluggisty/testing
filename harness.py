@@ -145,10 +145,23 @@ def get_vm_list() -> list[str]:
     vms = []
     for line in result.stdout.strip().split("\n"):
         line = line.strip()
-        if line.startswith(prefix):
+        # Match pattern: snail-test-<version>-<number>
+        if line.startswith(prefix) and "-" in line[len(prefix):]:
             vms.append(line)
     
-    return sorted(vms)
+    # Sort by version then number
+    def sort_key(vm_name: str) -> tuple:
+        parts = vm_name.split("-")
+        if len(parts) >= 3:
+            try:
+                version = int(parts[-2])
+                number = int(parts[-1])
+                return (version, number)
+            except ValueError:
+                return (0, 0)
+        return (0, 0)
+    
+    return sorted(vms, key=sort_key, reverse=True)
 
 
 def get_vm_info(vm_name: str) -> VMInfo:
@@ -170,7 +183,7 @@ def get_vm_info(vm_name: str) -> VMInfo:
             check=False
         )
         if result.returncode == 0:
-            match = re.search(r'192\.168\.\d+\.\d+', result.stdout)
+            match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', result.stdout)
             if match:
                 ip = match.group(0)
     
@@ -197,36 +210,54 @@ def cli():
 
 
 @cli.command()
-@click.option("--count", "-n", default=10, help="Number of VMs to create")
+@click.option("--versions", "-v", help="Comma-separated Fedora versions (e.g., 42,41,40). Default: 42")
+@click.option("--count", "-n", default=5, help="Number of VMs per version (default: 5)")
 @click.option("--memory", "-m", default=2048, help="Memory per VM in MB")
 @click.option("--cpus", "-c", default=2, help="vCPUs per VM")
-def create(count: int, memory: int, cpus: int):
-    """Create test VMs."""
+def create(versions: str, count: int, memory: int, cpus: int):
+    """Create test VMs for specified Fedora versions."""
     console.print(Panel.fit(
         "[bold blue]Creating Snail Core Test VMs[/]",
         border_style="blue"
     ))
     
-    # Check for base image first
-    console.print("\n[dim]Checking base image...[/]")
-    
     config = load_config()
-    image_dir = config.get("host", {}).get("image_dir", "/var/lib/libvirt/images")
-    base_image = Path(image_dir) / "fedora-cloud-base.qcow2"
     
-    if not base_image.exists():
-        console.print("[yellow]Base image not found. Downloading...[/]\n")
-        try:
-            run_script("setup-base-image.sh", capture=False)
-        except subprocess.CalledProcessError:
-            console.print("[red]Failed to download base image[/]")
-            sys.exit(1)
+    # Determine which versions to use
+    if not versions:
+        versions = ",".join(map(str, config.get("vms", {}).get("default_versions", [42])))
+    
+    version_list = [v.strip() for v in versions.split(",")]
+    console.print(f"\n[dim]Fedora versions: {', '.join(version_list)}[/]")
+    console.print(f"[dim]VMs per version: {count}[/]\n")
+    
+    # Check for base images
+    console.print("[dim]Checking base images...[/]")
+    image_dir = config.get("host", {}).get("image_dir", "/var/lib/libvirt/images")
+    missing_images = []
+    
+    for version in version_list:
+        base_image = Path(image_dir) / f"fedora-cloud-base-{version}.qcow2"
+        if not base_image.exists():
+            missing_images.append(version)
+            console.print(f"[yellow]Base image missing for Fedora {version}[/]")
+    
+    if missing_images:
+        console.print(f"\n[yellow]Downloading missing base images...[/]\n")
+        for version in missing_images:
+            try:
+                run_script("setup-base-image.sh", ["--version", version], capture=False)
+            except subprocess.CalledProcessError:
+                console.print(f"[red]Failed to download base image for Fedora {version}[/]")
+                sys.exit(1)
     
     # Create VMs
-    console.print(f"\n[dim]Creating {count} VMs...[/]\n")
+    total_vms = len(version_list) * count
+    console.print(f"\n[dim]Creating {total_vms} VMs ({count} per version)...[/]\n")
     
     env = os.environ.copy()
-    env["VM_COUNT"] = str(count)
+    env["FEDORA_VERSIONS"] = versions
+    env["VM_COUNT_PER_VERSION"] = str(count)
     env["MEMORY_MB"] = str(memory)
     env["VCPUS"] = str(cpus)
     
@@ -541,6 +572,30 @@ def ips():
     for vm in vms:
         if vm.ip:
             print(f"{vm.name}:{vm.ip}")
+
+
+@cli.command("list-versions")
+def list_versions():
+    """List available Fedora versions and their status."""
+    config = load_config()
+    available = config.get("vms", {}).get("available_versions", {})
+    image_dir = config.get("host", {}).get("image_dir", "/var/lib/libvirt/images")
+    
+    console.print()
+    table = Table(title="Available Fedora Versions")
+    table.add_column("Version", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Base Image", justify="center")
+    
+    for version, name in sorted(available.items(), reverse=True):
+        base_image = Path(image_dir) / f"fedora-cloud-base-{version}.qcow2"
+        status = "[green]✓[/]" if base_image.exists() else "[red]✗[/]"
+        table.add_row(str(version), name, status)
+    
+    console.print(table)
+    console.print()
+    console.print("[dim]Use --versions option when creating VMs to select specific versions[/]")
+    console.print("[dim]Example: ./harness.py create --versions 42,41,40,39[/]")
 
 
 @cli.group()

@@ -5,10 +5,12 @@ Automated testing infrastructure for snail-core using Fedora VMs. This environme
 ## Overview
 
 This testing harness:
-- Creates 10 Fedora minimal VMs using libvirt/KVM
+- Creates multiple Fedora VMs (default: 5 per version) using libvirt/KVM
+- Supports testing across multiple Fedora versions (42, 41, 40, 39, 38, 37, 36, 35, 34, 33)
 - Automatically clones and installs snail-core from GitHub
 - Configures VMs to report to `localhost:8080` on the host
 - Provides tools to manage, update, and execute commands on all VMs
+- VM names include version: `snail-test-42-1`, `snail-test-41-1`, etc.
 
 ## Prerequisites
 
@@ -65,26 +67,51 @@ make run
 
 The server should be accessible at `http://localhost:8080`.
 
-### 2. Create Test VMs
+### 2. List Available Fedora Versions
 
 ```bash
-# Download base image and create 10 VMs
+# See which Fedora versions are available and which base images are downloaded
+./harness.py list-versions
+```
+
+### 3. Download Base Images
+
+```bash
+# Download base images for specific Fedora versions
+./scripts/setup-base-image.sh --version 42
+./scripts/setup-base-image.sh --version 41
+./scripts/setup-base-image.sh --version 40
+# ... etc
+```
+
+### 4. Create Test VMs
+
+```bash
+# Create 5 VMs for Fedora 42 (default)
 ./harness.py create
 
-# Or with custom settings
-./harness.py create --count 5 --memory 1024 --cpus 1
+# Create VMs for multiple Fedora versions
+./harness.py create --versions 42,41,40,39,38
+
+# Create 3 VMs per version for specific versions
+./harness.py create --versions 42,41 --count 3
+
+# Custom resources
+./harness.py create --versions 42,41 --memory 1024 --cpus 1
 ```
 
 This will:
-1. Download the Fedora Cloud Base image (if not present)
-2. Create 10 VM disk images
+1. Check for required base images (download if missing)
+2. Create VM disk images (5 per version by default)
 3. Generate cloud-init configurations with snail-core setup
 4. Start all VMs
 5. Wait for VMs to get IP addresses
 
-**Note:** Initial setup takes 5-10 minutes as VMs run dnf updates and install snail-core.
+**Note:** 
+- VM names include version: `snail-test-42-1`, `snail-test-42-2`, `snail-test-41-1`, etc.
+- Initial setup takes 5-10 minutes per VM as they run dnf updates and install snail-core.
 
-### 3. Check VM Status
+### 5. Check VM Status
 
 ```bash
 # Show all VMs and their status
@@ -94,7 +121,7 @@ This will:
 ./harness.py check
 ```
 
-### 4. Run Snail on All VMs
+### 6. Run Snail on All VMs
 
 ```bash
 # Run 'snail run' on all VMs (collect and upload)
@@ -104,7 +131,7 @@ This will:
 ./harness.py run -C system -C network -C packages
 ```
 
-### 5. Update Snail Core
+### 7. Update Snail Core
 
 ```bash
 # Pull latest from GitHub and reinstall
@@ -114,7 +141,7 @@ This will:
 ./harness.py update --force
 ```
 
-### 6. Clean Up
+### 8. Clean Up
 
 ```bash
 # Destroy all VMs
@@ -130,7 +157,9 @@ This will:
 
 | Command | Description |
 |---------|-------------|
-| `./harness.py create` | Create test VMs |
+| `./harness.py create` | Create test VMs (default: 5 VMs for Fedora 42) |
+| `./harness.py create --versions 42,41,40` | Create VMs for specific Fedora versions |
+| `./harness.py list-versions` | List available Fedora versions |
 | `./harness.py destroy` | Remove all test VMs |
 | `./harness.py start` | Start all VMs |
 | `./harness.py stop` | Gracefully stop all VMs |
@@ -186,11 +215,14 @@ This will:
 ### Limit to Specific VMs
 
 ```bash
-# Run only on snail-test-1
-./harness.py run --limit snail-test-1
+# Run only on a specific VM
+./harness.py run --limit snail-test-42-1
 
-# Update on first 3 VMs
-./harness.py update --limit "snail-test-[1:3]"
+# Run on all Fedora 42 VMs
+./harness.py run --limit "snail-test-42-*"
+
+# Run on all VMs for versions 42 and 41
+./harness.py run --limit "snail-test-42-*,snail-test-41-*"
 ```
 
 ### Update Configuration
@@ -311,11 +343,12 @@ snail_core:
 
 Each VM is configured with:
 
-- **OS:** Fedora 42 Cloud (minimal)
-- **Resources:** 2GB RAM, 2 vCPUs, 15GB disk
+- **OS:** Fedora Cloud (minimal) - version specified at creation
+- **Resources:** 2GB RAM, 2 vCPUs, 15GB disk (configurable)
 - **User:** `snail` with sudo access
 - **Password:** `snailtest123` (for console access)
 - **SSH Key:** `~/.ssh/snail-test-key`
+- **Naming:** `snail-test-<version>-<number>` (e.g., `snail-test-42-1`, `snail-test-41-3`)
 
 ### Snail Core Setup in VMs
 

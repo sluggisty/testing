@@ -13,7 +13,7 @@ CONFIG_FILE="${TESTING_DIR}/config.yaml"
 # Default values (can be overridden by config)
 FEDORA_VERSION="${FEDORA_VERSION:-42}"
 IMAGE_DIR="${IMAGE_DIR:-/var/lib/libvirt/images}"
-BASE_IMAGE_NAME="fedora-cloud-base.qcow2"
+BASE_IMAGE_NAME="fedora-cloud-base-${FEDORA_VERSION}.qcow2"
 
 # Colors for output
 RED='\033[0;31m'
@@ -95,7 +95,7 @@ find_image_name() {
 download_image() {
     local version="$1"
     local dest_dir="$2"
-    local dest_file="${dest_dir}/${BASE_IMAGE_NAME}"
+    local dest_file="${dest_dir}/fedora-cloud-base-${version}.qcow2"
     
     if [[ -f "$dest_file" ]]; then
         log_warning "Base image already exists at ${dest_file}"
@@ -203,12 +203,12 @@ main() {
     done
     
     download_image "$FEDORA_VERSION" "$IMAGE_DIR"
-    verify_image "${IMAGE_DIR}/${BASE_IMAGE_NAME}"
+    verify_image "${IMAGE_DIR}/fedora-cloud-base-${FEDORA_VERSION}.qcow2"
     
     log_success "Base image setup complete!"
     echo ""
-    echo "Base image location: ${IMAGE_DIR}/${BASE_IMAGE_NAME}"
-    echo "You can now run: ./scripts/create-vms.sh"
+    echo "Base image location: ${IMAGE_DIR}/fedora-cloud-base-${FEDORA_VERSION}.qcow2"
+    echo "You can now run: ./scripts/create-vms.sh --versions ${FEDORA_VERSION}"
 }
 
 main "$@"

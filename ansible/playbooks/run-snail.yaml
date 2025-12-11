@@ -9,6 +9,7 @@
   vars:
     snail_venv_path: "/opt/snail-core/venv"
     snail_api_key: "{{ lookup('env', 'SNAIL_API_KEY') | default('test-api-key-12345', true) }}"
+    snail_upload_url: "{{ lookup('env', 'SNAIL_UPLOAD_URL') | default('http://192.168.124.1:8080/api/v1/ingest', true) }}"
     collectors: "{{ snail_collectors | default([]) }}"
   
   tasks:
@@ -17,6 +18,7 @@
         cmd: "{{ snail_venv_path }}/bin/snail run"
       environment:
         SNAIL_API_KEY: "{{ snail_api_key }}"
+        SNAIL_UPLOAD_URL: "{{ snail_upload_url }}"
       register: snail_result
       changed_when: true
       when: collectors | length == 0
@@ -26,6 +28,7 @@
         cmd: "{{ snail_venv_path }}/bin/snail collect --upload {{ collectors | map('regex_replace', '^(.*)$', '-C \\1') | join(' ') }}"
       environment:
         SNAIL_API_KEY: "{{ snail_api_key }}"
+        SNAIL_UPLOAD_URL: "{{ snail_upload_url }}"
       register: snail_result_specific
       changed_when: true
       when: collectors | length > 0

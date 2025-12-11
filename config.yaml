@@ -3,10 +3,10 @@
 
 # VM Settings
 vms:
-  # Number of VMs to create
-  count: 10
+  # Number of VMs per version
+  count_per_version: 5
   
-  # VM name prefix (will be suffixed with -1, -2, etc.)
+  # VM name prefix (will be suffixed with version and number, e.g., snail-test-42-1)
   name_prefix: "snail-test"
   
   # Resources per VM
@@ -14,8 +14,22 @@ vms:
   vcpus: 2
   disk_size_gb: 15
   
-  # Fedora version
-  fedora_version: 42
+  # Available Fedora versions to test
+  # Format: version: display_name
+  available_versions:
+    42: "Fedora 42 (Current)"
+    41: "Fedora 41"
+    40: "Fedora 40"
+    39: "Fedora 39"
+    38: "Fedora 38"
+    37: "Fedora 37"
+    36: "Fedora 36"
+    35: "Fedora 35"
+    34: "Fedora 34"
+    33: "Fedora 33"
+  
+  # Default versions to create (if not specified via command line)
+  default_versions: [42]
   
   # User credentials for VMs
   username: "snail"
@@ -46,7 +60,8 @@ snail_core:
   
   # API endpoint for snail uploads (from VM's perspective)
   # This should point to the host machine running snail-shell
-  api_endpoint: "http://192.168.122.1:8080/api/v1/ingest"
+  # Use the gateway IP of your libvirt network (check with: ip route on VM)
+  api_endpoint: "http://192.168.124.1:8080/api/v1/ingest"
   
   # API key for authentication
   api_key: "test-api-key-12345"

@@ -19,13 +19,14 @@ NC='\033[0m'
 
 # Get list of test VMs
 get_test_vms() {
-    sudo virsh list --all --name | grep "^${VM_PREFIX}-" | sort -V || true
+    # Match pattern: snail-test-<version>-<number>
+    sudo virsh list --all --name | grep "^${VM_PREFIX}-" | grep -E "^${VM_PREFIX}-[0-9]+-[0-9]+$" | sort -V || true
 }
 
 # Get VM IP address
 get_vm_ip() {
     local vm_name="$1"
-    sudo virsh domifaddr "$vm_name" 2>/dev/null | grep -oE '192\.168\.[0-9]+\.[0-9]+' | head -1 || echo ""
+    sudo virsh domifaddr "$vm_name" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo ""
 }
 
 # Get VM state

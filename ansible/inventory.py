@@ -43,10 +43,23 @@ def get_vm_list() -> list[str]:
     vms = []
     for line in stdout.split("\n"):
         line = line.strip()
-        if line.startswith(VM_PREFIX):
+        # Match pattern: snail-test-<version>-<number>
+        if line.startswith(VM_PREFIX) and "-" in line[len(VM_PREFIX):]:
             vms.append(line)
     
-    return sorted(vms)
+    # Sort by version then number
+    def sort_key(vm_name: str) -> tuple:
+        parts = vm_name.split("-")
+        if len(parts) >= 3:
+            try:
+                version = int(parts[-2])
+                number = int(parts[-1])
+                return (version, number)
+            except ValueError:
+                return (0, 0)
+        return (0, 0)
+    
+    return sorted(vms, key=sort_key, reverse=True)
 
 
 def get_vm_ip(vm_name: str) -> str | None:
@@ -55,8 +68,9 @@ def get_vm_ip(vm_name: str) -> str | None:
     if rc != 0:
         return None
     
-    # Parse IP from output like: vnet0  52:54:00:xx:xx:xx  ipv4  192.168.122.xxx/24
-    match = re.search(r'192\.168\.\d+\.\d+', stdout)
+    # Parse IP from output like: vnet0  52:54:00:xx:xx:xx  ipv4  192.168.124.xxx/24
+    # Match any private IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', stdout)
     if match:
         return match.group(0)
     return None

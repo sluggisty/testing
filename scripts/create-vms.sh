@@ -8,24 +8,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTING_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Default configuration
-VM_COUNT="${VM_COUNT:-10}"
+VM_COUNT_PER_VERSION="${VM_COUNT_PER_VERSION:-5}"
 VM_PREFIX="${VM_PREFIX:-snail-test}"
 MEMORY_MB="${MEMORY_MB:-2048}"
 VCPUS="${VCPUS:-2}"
 DISK_SIZE_GB="${DISK_SIZE_GB:-15}"
 IMAGE_DIR="${IMAGE_DIR:-/var/lib/libvirt/images}"
 CLOUDINIT_DIR="${CLOUDINIT_DIR:-/tmp/snail-test-cloudinit}"
-BASE_IMAGE="${BASE_IMAGE:-${IMAGE_DIR}/fedora-cloud-base.qcow2}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-${HOME}/.ssh/snail-test-key}"
 
 # Snail core configuration
 SNAIL_REPO="${SNAIL_REPO:-https://github.com/sluggisty/snail-core}"
-SNAIL_API_ENDPOINT="${SNAIL_API_ENDPOINT:-http://192.168.122.1:8080/api/v1/ingest}"
+SNAIL_API_ENDPOINT="${SNAIL_API_ENDPOINT:-http://192.168.124.1:8080/api/v1/ingest}"
 SNAIL_API_KEY="${SNAIL_API_KEY:-test-api-key-12345}"
 
 # VM user credentials
 VM_USER="${VM_USER:-snail}"
 VM_PASSWORD="${VM_PASSWORD:-snailtest123}"
+
+# Fedora versions to create (comma-separated, e.g., "42,41,40")
+FEDORA_VERSIONS="${FEDORA_VERSIONS:-42}"
 
 # Colors
 RED='\033[0;31m'
@@ -63,13 +65,26 @@ check_requirements() {
         log_info "Start with: sudo systemctl start libvirtd"
         exit 1
     fi
+}
+
+# Get base image path for a Fedora version
+get_base_image_path() {
+    local version="$1"
+    echo "${IMAGE_DIR}/fedora-cloud-base-${version}.qcow2"
+}
+
+# Check if base image exists for a version
+check_base_image() {
+    local version="$1"
+    local base_image
+    base_image=$(get_base_image_path "$version")
     
-    # Check if base image exists
-    if [[ ! -f "$BASE_IMAGE" ]]; then
-        log_error "Base image not found: ${BASE_IMAGE}"
-        log_info "Run ./scripts/setup-base-image.sh first"
-        exit 1
+    if [[ ! -f "$base_image" ]]; then
+        log_error "Base image not found for Fedora ${version}: ${base_image}"
+        log_info "Run: ./scripts/setup-base-image.sh --version ${version}"
+        return 1
     fi
+    return 0
 }
 
 # Generate SSH key if needed
@@ -87,6 +102,7 @@ setup_ssh_key() {
 create_cloud_init() {
     local vm_name="$1"
     local vm_number="$2"
+    local fedora_version="$3"
     local output_dir="${CLOUDINIT_DIR}/${vm_name}"
     
     mkdir -p "$output_dir"
@@ -140,6 +156,9 @@ packages:
   - lshw
   - pciutils
   - usbutils
+  - openscap-scanner
+  - scap-security-guide
+  - trivy
 
 # Run commands after boot
 runcmd:
@@ -159,7 +178,7 @@ runcmd:
   
   # Create configuration file
   - |
-    cat > /etc/snail-core/config.yaml << 'SNAILCONFIG'
+    cat > /etc/snail-core/config.yaml << EOF2
     upload:
       url: ${SNAIL_API_ENDPOINT}
       enabled: true
@@ -177,7 +196,7 @@ runcmd:
       compress: true
     logging:
       level: INFO
-    SNAILCONFIG
+    EOF2
   
   # Create systemd service for snail
   - |
@@ -235,7 +254,7 @@ write_files:
       alias snail="/opt/snail-core/venv/bin/snail"
     permissions: '0644'
 
-final_message: "Snail Core VM ${vm_name} is ready! Setup took \$UPTIME seconds."
+final_message: "Snail Core VM ${vm_name} (Fedora ${fedora_version}) is ready! Setup took \$UPTIME seconds."
 EOF
 
     # Create cloud-init ISO
@@ -254,8 +273,9 @@ EOF
 create_vm() {
     local vm_name="$1"
     local vm_number="$2"
+    local fedora_version="$3"
     
-    log_step "Creating VM: ${vm_name}"
+    log_step "Creating VM: ${vm_name} (Fedora ${fedora_version})"
     
     # Check if VM already exists
     if sudo virsh list --all --name | grep -q "^${vm_name}$"; then
@@ -263,16 +283,33 @@ create_vm() {
         return 0
     fi
     
+    # Check base image exists
+    local base_image
+    base_image=$(get_base_image_path "$fedora_version")
+    if ! check_base_image "$fedora_version"; then
+        return 1
+    fi
+    
     # Create disk from base image
     local disk_path="${IMAGE_DIR}/${vm_name}.qcow2"
     log_info "Creating disk: ${disk_path}"
-    sudo cp "$BASE_IMAGE" "$disk_path"
+    sudo cp "$base_image" "$disk_path"
     sudo qemu-img resize "$disk_path" "${DISK_SIZE_GB}G" 2>/dev/null
     
     # Create cloud-init ISO
     log_info "Creating cloud-init configuration..."
     local cloudinit_iso
-    cloudinit_iso=$(create_cloud_init "$vm_name" "$vm_number")
+    cloudinit_iso=$(create_cloud_init "$vm_name" "$vm_number" "$fedora_version")
+    
+    # Determine OS variant (try to map Fedora version)
+    local os_variant="fedora-unknown"
+    if [[ "$fedora_version" -ge 40 ]]; then
+        os_variant="fedora40"
+    elif [[ "$fedora_version" -ge 38 ]]; then
+        os_variant="fedora38"
+    elif [[ "$fedora_version" -ge 36 ]]; then
+        os_variant="fedora36"
+    fi
     
     # Create the VM
     log_info "Creating VM with virt-install..."
@@ -282,7 +319,7 @@ create_vm() {
         --vcpus "$VCPUS" \
         --disk "$disk_path" \
         --disk "${cloudinit_iso},device=cdrom" \
-        --os-variant fedora-unknown \
+        --os-variant "$os_variant" \
         --network network=default \
         --graphics none \
         --console pty,target_type=serial \
@@ -301,26 +338,36 @@ wait_for_vms() {
     local waited=0
     local interval=10
     
+    # Count total VMs
+    local total_vms=0
+    IFS=',' read -ra VERSIONS <<< "$FEDORA_VERSIONS"
+    for version in "${VERSIONS[@]}"; do
+        total_vms=$((total_vms + VM_COUNT_PER_VERSION))
+    done
+    
     while [[ $waited -lt $max_wait ]]; do
         local ready=0
         
-        for i in $(seq 1 "$VM_COUNT"); do
-            local vm_name="${VM_PREFIX}-${i}"
-            local ip
-            ip=$(sudo virsh domifaddr "$vm_name" 2>/dev/null | grep -oE '192\.168\.[0-9]+\.[0-9]+' | head -1 || true)
-            
-            if [[ -n "$ip" ]]; then
-                ready=$((ready + 1))
-            fi
+        IFS=',' read -ra VERSIONS <<< "$FEDORA_VERSIONS"
+        for version in "${VERSIONS[@]}"; do
+            for i in $(seq 1 "$VM_COUNT_PER_VERSION"); do
+                local vm_name="${VM_PREFIX}-${version}-${i}"
+                local ip
+                ip=$(sudo virsh domifaddr "$vm_name" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+                
+                if [[ -n "$ip" ]]; then
+                    ready=$((ready + 1))
+                fi
+            done
         done
         
-        if [[ $ready -eq $VM_COUNT ]]; then
+        if [[ $ready -eq $total_vms ]]; then
             echo ""
-            log_success "All ${VM_COUNT} VMs have IP addresses!"
+            log_success "All ${total_vms} VMs have IP addresses!"
             return 0
         fi
         
-        printf "\r${BLUE}[INFO]${NC} %d/%d VMs ready... (%ds elapsed)    " "$ready" "$VM_COUNT" "$waited"
+        printf "\r${BLUE}[INFO]${NC} %d/%d VMs ready... (%ds elapsed)    " "$ready" "$total_vms" "$waited"
         sleep "$interval"
         waited=$((waited + interval))
     done
@@ -328,7 +375,6 @@ wait_for_vms() {
     echo ""
     log_warning "Timeout waiting for all VMs. Some VMs may not have IP addresses yet."
     log_info "VMs are still booting. Check status with: ./harness.py status"
-    # Return success - VMs were created, they just need more time for IPs
     return 0
 }
 
@@ -339,17 +385,20 @@ show_vm_info() {
     echo "        VM Information Summary"
     echo "=========================================="
     
-    printf "%-20s %-18s %-10s\n" "VM Name" "IP Address" "Status"
-    printf "%-20s %-18s %-10s\n" "-------" "----------" "------"
+    printf "%-25s %-18s %-10s\n" "VM Name" "IP Address" "Status"
+    printf "%-25s %-18s %-10s\n" "-----------------------" "------------------" "----------"
     
-    for i in $(seq 1 "$VM_COUNT"); do
-        local vm_name="${VM_PREFIX}-${i}"
-        local status
-        status=$(sudo virsh domstate "$vm_name" 2>/dev/null || echo "unknown")
-        local ip
-        ip=$(sudo virsh domifaddr "$vm_name" 2>/dev/null | grep -oE '192\.168\.[0-9]+\.[0-9]+' | head -1 || echo "pending...")
-        
-        printf "%-20s %-18s %-10s\n" "$vm_name" "$ip" "$status"
+    IFS=',' read -ra VERSIONS <<< "$FEDORA_VERSIONS"
+    for version in "${VERSIONS[@]}"; do
+        for i in $(seq 1 "$VM_COUNT_PER_VERSION"); do
+            local vm_name="${VM_PREFIX}-${version}-${i}"
+            local status
+            status=$(sudo virsh domstate "$vm_name" 2>/dev/null || echo "unknown")
+            local ip
+            ip=$(sudo virsh domifaddr "$vm_name" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "pending...")
+            
+            printf "%-25s %-18s %-10s\n" "$vm_name" "$ip" "$status"
+        done
     done
     
     echo ""
@@ -369,8 +418,12 @@ main() {
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --versions|-v)
+                FEDORA_VERSIONS="$2"
+                shift 2
+                ;;
             --count|-n)
-                VM_COUNT="$2"
+                VM_COUNT_PER_VERSION="$2"
                 shift 2
                 ;;
             --prefix|-p)
@@ -389,11 +442,16 @@ main() {
                 echo "Usage: $0 [options]"
                 echo ""
                 echo "Options:"
-                echo "  --count, -n NUM     Number of VMs to create (default: 10)"
-                echo "  --prefix, -p NAME   VM name prefix (default: snail-test)"
-                echo "  --memory, -m MB     Memory per VM in MB (default: 2048)"
-                echo "  --cpus, -c NUM      vCPUs per VM (default: 2)"
+                echo "  --versions, -v LIST   Comma-separated Fedora versions (default: 42)"
+                echo "                       Example: --versions 42,41,40,39"
+                echo "  --count, -n NUM       Number of VMs per version (default: 5)"
+                echo "  --prefix, -p NAME    VM name prefix (default: snail-test)"
+                echo "  --memory, -m MB      Memory per VM in MB (default: 2048)"
+                echo "  --cpus, -c NUM       vCPUs per VM (default: 2)"
                 echo ""
+                echo "Examples:"
+                echo "  $0 --versions 42,41,40"
+                echo "  $0 --versions 42 --count 3"
                 exit 0
                 ;;
             *)
@@ -404,22 +462,47 @@ main() {
     done
     
     log_info "Configuration:"
-    log_info "  VM Count: ${VM_COUNT}"
+    log_info "  Fedora Versions: ${FEDORA_VERSIONS}"
+    log_info "  VMs per Version: ${VM_COUNT_PER_VERSION}"
     log_info "  VM Prefix: ${VM_PREFIX}"
     log_info "  Memory: ${MEMORY_MB} MB"
     log_info "  vCPUs: ${VCPUS}"
-    log_info "  Base Image: ${BASE_IMAGE}"
     echo ""
     
     check_requirements
     setup_ssh_key
     
+    # Verify base images exist for all versions
+    log_info "Checking base images..."
+    IFS=',' read -ra VERSIONS <<< "$FEDORA_VERSIONS"
+    local missing_versions=()
+    for version in "${VERSIONS[@]}"; do
+        if ! check_base_image "$version"; then
+            missing_versions+=("$version")
+        fi
+    done
+    
+    if [[ ${#missing_versions[@]} -gt 0 ]]; then
+        log_error "Missing base images for versions: ${missing_versions[*]}"
+        log_info "Download them with:"
+        for version in "${missing_versions[@]}"; do
+            log_info "  ./scripts/setup-base-image.sh --version ${version}"
+        done
+        exit 1
+    fi
+    
     # Create cloud-init directory
     mkdir -p "$CLOUDINIT_DIR"
     
-    # Create VMs
-    for i in $(seq 1 "$VM_COUNT"); do
-        create_vm "${VM_PREFIX}-${i}" "$i"
+    # Create VMs for each version
+    local vm_counter=1
+    for version in "${VERSIONS[@]}"; do
+        log_info ""
+        log_info "Creating VMs for Fedora ${version}..."
+        for i in $(seq 1 "$VM_COUNT_PER_VERSION"); do
+            create_vm "${VM_PREFIX}-${version}-${i}" "$vm_counter" "$version"
+            vm_counter=$((vm_counter + 1))
+        done
     done
     
     echo ""
@@ -428,18 +511,20 @@ main() {
     
     # Save VM list for later use
     local vm_list_file="${TESTING_DIR}/vm-list.txt"
-    for i in $(seq 1 "$VM_COUNT"); do
-        echo "${VM_PREFIX}-${i}"
-    done > "$vm_list_file"
+    > "$vm_list_file"
+    for version in "${VERSIONS[@]}"; do
+        for i in $(seq 1 "$VM_COUNT_PER_VERSION"); do
+            echo "${VM_PREFIX}-${version}-${i}"
+        done
+    done >> "$vm_list_file"
     
     log_success "VM creation complete!"
     log_info "VM list saved to: ${vm_list_file}"
     log_info ""
     log_info "Next steps:"
     log_info "  1. Wait a few minutes for VMs to complete cloud-init setup"
-    log_info "  2. Check VM status: ./scripts/get-vm-ips.sh"
-    log_info "  3. Run snail on all VMs: ./harness.py run-all"
+    log_info "  2. Check VM status: ./harness.py status"
+    log_info "  3. Run snail on all VMs: ./harness.py run"
 }
 
 main "$@"
-
