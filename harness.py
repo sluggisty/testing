@@ -469,6 +469,27 @@ def check(limit: str, verbose: bool):
         console.print("\n[yellow]Some VMs may have issues[/]")
 
 
+@cli.command("cloud-init-status")
+@click.option("--limit", "-l", help="Limit to specific VM(s)")
+def cloud_init_status(limit: str):
+    """Check cloud-init status on all VMs."""
+    console.print(Panel.fit(
+        "[bold blue]Checking cloud-init status[/]",
+        border_style="blue"
+    ))
+    
+    extra_vars = {"cmd": "cloud-init status --long"}
+    
+    success = run_ansible_playbook(
+        "run-command.yaml",
+        extra_vars=extra_vars,
+        limit=limit
+    )
+    
+    if not success:
+        console.print("\n[yellow]Some VMs may have issues[/]")
+
+
 @cli.command()
 @click.argument("vm_name")
 def ssh(vm_name: str):

@@ -145,6 +145,7 @@ chpasswd:
 ssh_pwauth: true
 
 # Install required packages
+# Note: Some packages may not be available in older Fedora versions
 packages:
   - python3
   - python3-pip
@@ -156,14 +157,17 @@ packages:
   - lshw
   - pciutils
   - usbutils
-  - openscap-scanner
-  - scap-security-guide
-  - trivy
 
 # Run commands after boot
 runcmd:
   # Update system
-  - dnf update -y
+  - dnf update -y || true
+  
+  # Install optional security packages (may not be available in older versions)
+  - dnf install -y openscap-scanner scap-security-guide || echo "Some optional packages not available, continuing..."
+  
+  # Install trivy using official install script (works across all Fedora versions)
+  - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin || echo "Trivy installation failed, continuing..."
   
   # Clone snail-core
   - git clone ${SNAIL_REPO} /opt/snail-core

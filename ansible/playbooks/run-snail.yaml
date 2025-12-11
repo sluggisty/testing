@@ -13,6 +13,25 @@
     collectors: "{{ snail_collectors | default([]) }}"
   
   tasks:
+    - name: Check if snail-core is installed
+      ansible.builtin.stat:
+        path: "{{ snail_venv_path }}/bin/snail"
+      register: snail_bin
+      failed_when: false
+      changed_when: false
+    
+    - name: Check if setup is complete
+      ansible.builtin.stat:
+        path: /var/lib/snail-core/.setup-complete
+      register: setup_complete
+      failed_when: false
+      changed_when: false
+    
+    - name: Skip VMs where snail-core is not installed
+      ansible.builtin.debug:
+        msg: "Skipping {{ inventory_hostname }} - snail-core not installed yet (cloud-init may still be running)"
+      when: not snail_bin.stat.exists
+    
     - name: Run snail with all collectors
       ansible.builtin.command:
         cmd: "{{ snail_venv_path }}/bin/snail run"
@@ -21,7 +40,9 @@
         SNAIL_UPLOAD_URL: "{{ snail_upload_url }}"
       register: snail_result
       changed_when: true
-      when: collectors | length == 0
+      when: 
+        - collectors | length == 0
+        - snail_bin.stat.exists
     
     - name: Run snail with specific collectors
       ansible.builtin.command:
@@ -31,10 +52,19 @@
         SNAIL_UPLOAD_URL: "{{ snail_upload_url }}"
       register: snail_result_specific
       changed_when: true
-      when: collectors | length > 0
+      when: 
+        - collectors | length > 0
+        - snail_bin.stat.exists
     
     - name: Show snail output
       ansible.builtin.debug:
         msg: "{{ (snail_result.stdout | default(snail_result_specific.stdout | default(''))) | split('\n') }}"
-      when: snail_result is defined or snail_result_specific is defined
+      when: 
+        - (snail_result is defined or snail_result_specific is defined)
+        - snail_bin.stat.exists
+    
+    - name: Summary of skipped VMs
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} skipped - waiting for cloud-init to complete snail-core installation"
+      when: not snail_bin.stat.exists
 

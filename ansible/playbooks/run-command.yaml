@@ -15,7 +15,7 @@
         cmd: "{{ command }}"
       register: cmd_result
       changed_when: true
-      ignore_errors: "{{ ignore_errors | default(false) }}"
+      ignore_errors: "{{ ignore_errors | default(true) }}"
     
     - name: Show stdout
       ansible.builtin.debug:

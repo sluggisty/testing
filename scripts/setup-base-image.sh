@@ -58,13 +58,29 @@ check_requirements() {
 # Find the correct image name from Fedora's directory listing
 find_image_name() {
     local version="$1"
-    local base_url="https://download.fedoraproject.org/pub/fedora/linux/releases/${version}/Cloud/x86_64/images/"
     
-    # Try to get directory listing and find the qcow2 image
-    local image_name
-    image_name=$(curl -sL "$base_url" | grep -oE 'Fedora-Cloud-Base[^"]+\.qcow2' | head -1 || true)
+    # Determine which location to try first
+    # Versions 40 and below are in archive, 41+ are in main releases
+    local try_archive_first=false
+    if [[ "$version" -le 40 ]]; then
+        try_archive_first=true
+    fi
     
-    if [[ -z "$image_name" ]]; then
+    # Function to try finding image at a given base URL
+    try_find_at_url() {
+        local base_url="$1"
+        local url_label="$2"
+        
+        # Try to get directory listing and find the qcow2 image
+        local image_name
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'Fedora-Cloud-Base[^"]+\.qcow2' | head -1 || true)
+        
+        if [[ -n "$image_name" ]]; then
+            echo "$image_name"
+            echo "$base_url" > /tmp/fedora_base_url_${version}
+            return 0
+        fi
+        
         # Fallback: try common naming patterns
         for pattern in \
             "Fedora-Cloud-Base-Generic-${version}-1.6.x86_64.qcow2" \
@@ -78,14 +94,55 @@ find_image_name() {
             "Fedora-Cloud-Base-${version}-1.4.x86_64.qcow2"; do
             
             local test_url="${base_url}${pattern}"
-            if curl -sIf "$test_url" >/dev/null 2>&1; then
-                echo "$pattern"
-                return 0
+            # Check if URL exists and returns actual content (not error page)
+            local http_code
+            http_code=$(curl -sL -o /dev/null -w "%{http_code}" "$test_url" 2>/dev/null || echo "000")
+            
+            if [[ "$http_code" == "200" ]]; then
+                # Download a small chunk to verify it's not HTML
+                local test_content
+                test_content=$(curl -sL -r 0-100 "$test_url" 2>/dev/null || true)
+                
+                # Check if it looks like QCOW2 (starts with QFI\xfb) or is HTML
+                local looks_like_qcow2=false
+                if echo "$test_content" | head -c 4 | hexdump -e '4/1 "%02x"' 2>/dev/null | grep -q "^514649fb"; then
+                    looks_like_qcow2=true
+                elif ! echo "$test_content" | grep -qE "<html|<!DOCTYPE"; then
+                    # If it doesn't look like HTML, assume it might be binary (qcow2)
+                    looks_like_qcow2=true
+                fi
+                
+                if [[ "$looks_like_qcow2" == "true" ]]; then
+                    echo "$pattern"
+                    echo "$base_url" > /tmp/fedora_base_url_${version}
+                    return 0
+                fi
             fi
         done
-    else
-        echo "$image_name"
+        
+        return 1
+    }
+    
+    # Try archive location first for versions 40 and below
+    if [[ "$try_archive_first" == "true" ]]; then
+        local archive_url="https://archive.fedoraproject.org/pub/archive/fedora/linux/releases/${version}/Cloud/x86_64/images/"
+        if try_find_at_url "$archive_url" "archive"; then
+            return 0
+        fi
+    fi
+    
+    # Try main releases location
+    local main_url="https://download.fedoraproject.org/pub/fedora/linux/releases/${version}/Cloud/x86_64/images/"
+    if try_find_at_url "$main_url" "main"; then
         return 0
+    fi
+    
+    # If archive wasn't tried first, try it now as fallback
+    if [[ "$try_archive_first" != "true" ]] && [[ "$version" -le 40 ]]; then
+        local archive_url="https://archive.fedoraproject.org/pub/archive/fedora/linux/releases/${version}/Cloud/x86_64/images/"
+        if try_find_at_url "$archive_url" "archive"; then
+            return 0
+        fi
     fi
     
     return 1
@@ -113,13 +170,22 @@ download_image() {
     local image_name
     if ! image_name=$(find_image_name "$version"); then
         log_error "Could not find Fedora ${version} cloud image"
+        log_info "This version may be too old or no longer available."
         log_info "Try a different version with: $0 --version 42"
-        log_info "Or download manually from: https://fedoraproject.org/cloud/download"
+        log_info "Or check: https://fedoraproject.org/cloud/download"
         exit 1
     fi
     
-    local base_url="https://download.fedoraproject.org/pub/fedora/linux/releases"
-    local download_url="${base_url}/${version}/Cloud/x86_64/images/${image_name}"
+    # Get base URL from temp file (set by find_image_name)
+    local base_url
+    if [[ -f "/tmp/fedora_base_url_${version}" ]]; then
+        base_url=$(cat "/tmp/fedora_base_url_${version}")
+        rm -f "/tmp/fedora_base_url_${version}"
+    else
+        base_url="https://download.fedoraproject.org/pub/fedora/linux/releases/${version}/Cloud/x86_64/images/"
+    fi
+    
+    local download_url="${base_url}${image_name}"
     
     log_info "Found image: ${image_name}"
     log_info "Downloading from: ${download_url}"
@@ -128,24 +194,68 @@ download_image() {
     sudo mkdir -p "$dest_dir"
     
     # Download to temp location first
-    local temp_file="/tmp/fedora-cloud-download.qcow2"
+    local temp_file="/tmp/fedora-cloud-download-${version}.qcow2"
     
     # Use curl with better progress and redirect following
-    if curl -L --progress-bar -o "$temp_file" "$download_url"; then
+    if curl -L --progress-bar -f -o "$temp_file" "$download_url" 2>&1; then
         # Verify it's a valid qcow2 image (not an error page)
-        if file "$temp_file" | grep -q "QEMU QCOW"; then
+        # Check file size (should be > 100MB for a cloud image)
+        local file_size
+        file_size=$(stat -f%z "$temp_file" 2>/dev/null || stat -c%s "$temp_file" 2>/dev/null || echo "0")
+        
+        # Check if it's HTML (error page)
+        if head -c 100 "$temp_file" | grep -q "<html\|<!DOCTYPE\|404\|Not Found\|Error"; then
+            log_error "Downloaded file appears to be an HTML error page"
+            log_info "The image may not be available for Fedora ${version}"
+            log_info "First 100 bytes:"
+            head -c 100 "$temp_file" | cat -A
+            echo ""
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        # Check if it's a QCOW2 file (magic bytes: QFI\xfb = 0x514649fb)
+        # Use hexdump or od to check magic bytes
+        local is_qcow2=false
+        if command -v hexdump &> /dev/null; then
+            local magic
+            magic=$(hexdump -n 4 -e '4/1 "%02x"' "$temp_file" 2>/dev/null || echo "")
+            if [[ "$magic" == "514649fb" ]]; then
+                is_qcow2=true
+            fi
+        elif command -v od &> /dev/null; then
+            local magic
+            magic=$(od -An -tx1 -N 4 "$temp_file" 2>/dev/null | tr -d ' \n' || echo "")
+            if [[ "$magic" == "514649fb" ]]; then
+                is_qcow2=true
+            fi
+        fi
+        
+        # Also check with file command
+        if file "$temp_file" 2>/dev/null | grep -qE "QEMU QCOW|QCOW"; then
+            is_qcow2=true
+        fi
+        
+        if [[ "$is_qcow2" == "true" ]]; then
+            if [[ $file_size -lt 104857600 ]]; then
+                log_warning "File size is small (${file_size} bytes). This might not be a complete image."
+            fi
+            
             sudo mv "$temp_file" "$dest_file"
             sudo chown root:root "$dest_file"
             sudo chmod 644 "$dest_file"
             log_success "Image downloaded to ${dest_file}"
         else
             log_error "Downloaded file is not a valid QCOW2 image"
-            log_info "The file might be an error page. Try downloading manually."
+            log_info "Magic bytes: ${magic_bytes} (expected: 514649fb)"
+            log_info "File type: $(file "$temp_file" || echo 'unknown')"
+            log_info "The file might be an error page or corrupted download."
             rm -f "$temp_file"
             exit 1
         fi
     else
         log_error "Failed to download image"
+        log_info "URL might be incorrect or the file is no longer available"
         rm -f "$temp_file"
         exit 1
     fi
