@@ -1,0 +1,62 @@
+---
+# status.yaml - Check snail-core status on all VMs
+# ================================================
+
+- name: Check snail-core status on all VMs
+  hosts: snail_vms
+  become: true
+  gather_facts: true
+  
+  vars:
+    snail_venv_path: "/opt/snail-core/venv"
+    snail_config_path: "/etc/snail-core/config.yaml"
+  
+  tasks:
+    - name: Check if snail-core is installed
+      ansible.builtin.stat:
+        path: "{{ snail_venv_path }}/bin/snail"
+      register: snail_bin
+    
+    - name: Get snail version
+      ansible.builtin.command:
+        cmd: "{{ snail_venv_path }}/bin/snail --version"
+      register: snail_version
+      changed_when: false
+      when: snail_bin.stat.exists
+    
+    - name: Check snail-core timer status
+      ansible.builtin.systemd:
+        name: snail-core.timer
+      register: timer_status
+      ignore_errors: true
+    
+    - name: Check last snail run (journal)
+      ansible.builtin.command:
+        cmd: journalctl -u snail-core.service -n 5 --no-pager
+      register: last_run
+      changed_when: false
+      ignore_errors: true
+    
+    - name: Check config file exists
+      ansible.builtin.stat:
+        path: "{{ snail_config_path }}"
+      register: config_file
+    
+    - name: Get local reports count
+      ansible.builtin.find:
+        paths: /var/lib/snail-core
+        patterns: "*.json"
+      register: local_reports
+    
+    - name: Display status summary
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} ({{ ansible_host }}) ===
+          Hostname: {{ ansible_hostname }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Snail Installed: {{ snail_bin.stat.exists }}
+          Snail Version: {{ snail_version.stdout | default('N/A') }}
+          Timer Active: {{ timer_status.status.ActiveState | default('N/A') }}
+          Config Exists: {{ config_file.stat.exists }}
+          Local Reports: {{ local_reports.files | length }}
+

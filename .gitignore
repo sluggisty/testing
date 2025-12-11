@@ -1,0 +1,25 @@
+# Generated files
+vm-list.txt
+logs/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Ansible
+*.retry
+ansible/inventory_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Keep logs directory
+!logs/.gitkeep
+

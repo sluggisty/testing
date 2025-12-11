@@ -1,0 +1,29 @@
+---
+# run-command.yaml - Execute arbitrary commands on all VMs
+# ========================================================
+
+- name: Run custom command on all VMs
+  hosts: snail_vms
+  become: "{{ run_as_root | default(true) }}"
+  
+  vars:
+    command: "{{ cmd | mandatory }}"
+  
+  tasks:
+    - name: Execute command
+      ansible.builtin.shell:
+        cmd: "{{ command }}"
+      register: cmd_result
+      changed_when: true
+      ignore_errors: "{{ ignore_errors | default(false) }}"
+    
+    - name: Show stdout
+      ansible.builtin.debug:
+        msg: "{{ cmd_result.stdout_lines }}"
+      when: cmd_result.stdout | length > 0
+    
+    - name: Show stderr
+      ansible.builtin.debug:
+        msg: "{{ cmd_result.stderr_lines }}"
+      when: cmd_result.stderr | length > 0
+

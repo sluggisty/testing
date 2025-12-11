@@ -1,0 +1,71 @@
+# Snail Core VM Testing Configuration
+# ====================================
+
+# VM Settings
+vms:
+  # Number of VMs to create
+  count: 10
+  
+  # VM name prefix (will be suffixed with -1, -2, etc.)
+  name_prefix: "snail-test"
+  
+  # Resources per VM
+  memory_mb: 2048
+  vcpus: 2
+  disk_size_gb: 15
+  
+  # Fedora version
+  fedora_version: 41
+  
+  # User credentials for VMs
+  username: "snail"
+  password: "snailtest123"
+  
+  # SSH key path (optional, will be generated if not exists)
+  ssh_key_path: "~/.ssh/snail-test-key"
+
+# Network Settings
+network:
+  # libvirt network to use
+  name: "default"
+  
+  # Base IP for static assignment (optional)
+  # If not set, VMs will use DHCP
+  # static_ip_base: "192.168.122.100"
+
+# Snail Core Settings
+snail_core:
+  # Git repository URL
+  repo_url: "https://github.com/sluggisty/snail-core"
+  
+  # Branch to use
+  branch: "main"
+  
+  # Installation path inside VMs
+  install_path: "/opt/snail-core"
+  
+  # API endpoint for snail uploads (from VM's perspective)
+  # This should point to the host machine running snail-shell
+  api_endpoint: "http://192.168.122.1:8080/api/v1/ingest"
+  
+  # API key for authentication
+  api_key: "test-api-key-12345"
+
+# Host Settings
+host:
+  # Path to store VM images
+  image_dir: "/var/lib/libvirt/images"
+  
+  # Path to store cloud-init ISOs
+  cloudinit_dir: "/tmp/snail-test-cloudinit"
+  
+  # Path to base Fedora cloud image (will be downloaded if not exists)
+  base_image_path: "/var/lib/libvirt/images/fedora-cloud-base.qcow2"
+
+# Paths (relative to testing directory)
+paths:
+  ansible_inventory: "./ansible/inventory.py"
+  ansible_playbooks: "./ansible/playbooks"
+  scripts: "./scripts"
+  logs: "./logs"
+

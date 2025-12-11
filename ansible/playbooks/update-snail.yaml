@@ -1,0 +1,63 @@
+---
+# update-snail.yaml - Update snail-core to latest version on all VMs
+# ===================================================================
+
+- name: Update snail-core on all VMs
+  hosts: snail_vms
+  become: true
+  
+  vars:
+    snail_repo: "https://github.com/sluggisty/snail-core"
+    snail_branch: "main"
+    snail_install_path: "/opt/snail-core"
+    snail_venv_path: "/opt/snail-core/venv"
+  
+  tasks:
+    - name: Stop snail-core timer
+      ansible.builtin.systemd:
+        name: snail-core.timer
+        state: stopped
+      ignore_errors: true
+    
+    - name: Pull latest changes from git
+      ansible.builtin.git:
+        repo: "{{ snail_repo }}"
+        dest: "{{ snail_install_path }}"
+        version: "{{ snail_branch }}"
+        force: true
+      register: git_result
+    
+    - name: Upgrade pip in virtual environment
+      ansible.builtin.pip:
+        name: pip
+        state: latest
+        virtualenv: "{{ snail_venv_path }}"
+    
+    - name: Reinstall snail-core package
+      ansible.builtin.pip:
+        name: "{{ snail_install_path }}"
+        state: forcereinstall
+        virtualenv: "{{ snail_venv_path }}"
+        extra_args: "-e"
+      when: git_result.changed or force_reinstall | default(false)
+    
+    - name: Verify snail command works
+      ansible.builtin.command:
+        cmd: "{{ snail_venv_path }}/bin/snail --version"
+      register: snail_version
+      changed_when: false
+    
+    - name: Display snail version
+      ansible.builtin.debug:
+        msg: "Snail version: {{ snail_version.stdout }}"
+    
+    - name: Start snail-core timer
+      ansible.builtin.systemd:
+        name: snail-core.timer
+        state: started
+        daemon_reload: true
+    
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "snail-core updated successfully on {{ inventory_hostname }}"
+

@@ -1,0 +1,37 @@
+---
+# run-snail.yaml - Execute snail run command on all VMs
+# =====================================================
+
+- name: Run snail-core on all VMs
+  hosts: snail_vms
+  become: true
+  
+  vars:
+    snail_venv_path: "/opt/snail-core/venv"
+    snail_api_key: "{{ lookup('env', 'SNAIL_API_KEY') | default('test-api-key-12345', true) }}"
+    collectors: "{{ snail_collectors | default([]) }}"
+  
+  tasks:
+    - name: Run snail with all collectors
+      ansible.builtin.command:
+        cmd: "{{ snail_venv_path }}/bin/snail run"
+      environment:
+        SNAIL_API_KEY: "{{ snail_api_key }}"
+      register: snail_result
+      changed_when: true
+      when: collectors | length == 0
+    
+    - name: Run snail with specific collectors
+      ansible.builtin.command:
+        cmd: "{{ snail_venv_path }}/bin/snail collect --upload {{ collectors | map('regex_replace', '^(.*)$', '-C \\1') | join(' ') }}"
+      environment:
+        SNAIL_API_KEY: "{{ snail_api_key }}"
+      register: snail_result_specific
+      changed_when: true
+      when: collectors | length > 0
+    
+    - name: Show snail output
+      ansible.builtin.debug:
+        msg: "{{ (snail_result.stdout | default(snail_result_specific.stdout | default(''))) | split('\n') }}"
+      when: snail_result is defined or snail_result_specific is defined
+
