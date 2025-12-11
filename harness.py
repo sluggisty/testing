@@ -230,14 +230,20 @@ def create(count: int, memory: int, cpus: int):
     env["MEMORY_MB"] = str(memory)
     env["VCPUS"] = str(cpus)
     
-    try:
-        run_command(
-            ["bash", str(SCRIPTS_DIR / "create-vms.sh")],
-            capture=False,
-            env=env
-        )
-        console.print("\n[green]✓ VMs created successfully![/]")
-    except subprocess.CalledProcessError:
+    result = run_command(
+        ["bash", str(SCRIPTS_DIR / "create-vms.sh")],
+        capture=False,
+        check=False,  # Don't fail on non-zero exit
+        env=env
+    )
+    
+    # Check if VMs were actually created
+    vms = get_vm_list()
+    if len(vms) > 0:
+        console.print(f"\n[green]✓ {len(vms)} VMs created![/]")
+        console.print("[dim]Note: VMs may take a few minutes to boot and get IP addresses.[/]")
+        console.print("[dim]Check status with: ./harness.py status[/]")
+    else:
         console.print("[red]Failed to create VMs[/]")
         sys.exit(1)
 

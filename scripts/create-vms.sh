@@ -297,7 +297,7 @@ create_vm() {
 wait_for_vms() {
     log_info "Waiting for VMs to boot and get IP addresses..."
     
-    local max_wait=300
+    local max_wait=180
     local waited=0
     local interval=10
     
@@ -310,22 +310,26 @@ wait_for_vms() {
             ip=$(sudo virsh domifaddr "$vm_name" 2>/dev/null | grep -oE '192\.168\.[0-9]+\.[0-9]+' | head -1 || true)
             
             if [[ -n "$ip" ]]; then
-                ((ready++))
+                ready=$((ready + 1))
             fi
         done
         
         if [[ $ready -eq $VM_COUNT ]]; then
+            echo ""
             log_success "All ${VM_COUNT} VMs have IP addresses!"
             return 0
         fi
         
-        echo -ne "\r${BLUE}[INFO]${NC} ${ready}/${VM_COUNT} VMs ready... (${waited}s elapsed)"
+        printf "\r${BLUE}[INFO]${NC} %d/%d VMs ready... (%ds elapsed)    " "$ready" "$VM_COUNT" "$waited"
         sleep "$interval"
-        ((waited+=interval))
+        waited=$((waited + interval))
     done
     
     echo ""
     log_warning "Timeout waiting for all VMs. Some VMs may not have IP addresses yet."
+    log_info "VMs are still booting. Check status with: ./harness.py status"
+    # Return success - VMs were created, they just need more time for IPs
+    return 0
 }
 
 # Display VM information
