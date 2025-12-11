@@ -15,7 +15,7 @@ vms:
   disk_size_gb: 15
   
   # Fedora version
-  fedora_version: 41
+  fedora_version: 42
   
   # User credentials for VMs
   username: "snail"

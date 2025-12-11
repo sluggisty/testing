@@ -311,7 +311,7 @@ snail_core:
 
 Each VM is configured with:
 
-- **OS:** Fedora 41 Cloud (minimal)
+- **OS:** Fedora 42 Cloud (minimal)
 - **Resources:** 2GB RAM, 2 vCPUs, 15GB disk
 - **User:** `snail` with sudo access
 - **Password:** `snailtest123` (for console access)

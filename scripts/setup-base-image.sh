@@ -11,7 +11,7 @@ TESTING_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="${TESTING_DIR}/config.yaml"
 
 # Default values (can be overridden by config)
-FEDORA_VERSION="${FEDORA_VERSION:-41}"
+FEDORA_VERSION="${FEDORA_VERSION:-42}"
 IMAGE_DIR="${IMAGE_DIR:-/var/lib/libvirt/images}"
 BASE_IMAGE_NAME="fedora-cloud-base.qcow2"
 
@@ -42,7 +42,7 @@ log_error() {
 check_requirements() {
     local missing=()
     
-    for cmd in wget qemu-img virsh; do
+    for cmd in curl qemu-img virsh; do
         if ! command -v "$cmd" &> /dev/null; then
             missing+=("$cmd")
         fi
@@ -50,9 +50,45 @@ check_requirements() {
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing required tools: ${missing[*]}"
-        log_info "Install with: sudo dnf install wget qemu-img libvirt"
+        log_info "Install with: sudo dnf install curl qemu-img libvirt"
         exit 1
     fi
+}
+
+# Find the correct image name from Fedora's directory listing
+find_image_name() {
+    local version="$1"
+    local base_url="https://download.fedoraproject.org/pub/fedora/linux/releases/${version}/Cloud/x86_64/images/"
+    
+    # Try to get directory listing and find the qcow2 image
+    local image_name
+    image_name=$(curl -sL "$base_url" | grep -oE 'Fedora-Cloud-Base[^"]+\.qcow2' | head -1 || true)
+    
+    if [[ -z "$image_name" ]]; then
+        # Fallback: try common naming patterns
+        for pattern in \
+            "Fedora-Cloud-Base-Generic-${version}-1.6.x86_64.qcow2" \
+            "Fedora-Cloud-Base-Generic.x86_64-${version}-1.6.qcow2" \
+            "Fedora-Cloud-Base-Generic-${version}-1.5.x86_64.qcow2" \
+            "Fedora-Cloud-Base-Generic.x86_64-${version}-1.5.qcow2" \
+            "Fedora-Cloud-Base-Generic-${version}-1.4.x86_64.qcow2" \
+            "Fedora-Cloud-Base-Generic.x86_64-${version}-1.4.qcow2" \
+            "Fedora-Cloud-Base-${version}-1.6.x86_64.qcow2" \
+            "Fedora-Cloud-Base-${version}-1.5.x86_64.qcow2" \
+            "Fedora-Cloud-Base-${version}-1.4.x86_64.qcow2"; do
+            
+            local test_url="${base_url}${pattern}"
+            if curl -sIf "$test_url" >/dev/null 2>&1; then
+                echo "$pattern"
+                return 0
+            fi
+        done
+    else
+        echo "$image_name"
+        return 0
+    fi
+    
+    return 1
 }
 
 # Download Fedora cloud image
@@ -60,11 +96,6 @@ download_image() {
     local version="$1"
     local dest_dir="$2"
     local dest_file="${dest_dir}/${BASE_IMAGE_NAME}"
-    
-    # Fedora cloud image URL
-    local base_url="https://download.fedoraproject.org/pub/fedora/linux/releases"
-    local image_name="Fedora-Cloud-Base-Generic.x86_64-${version}-1.4.qcow2"
-    local download_url="${base_url}/${version}/Cloud/x86_64/images/${image_name}"
     
     if [[ -f "$dest_file" ]]; then
         log_warning "Base image already exists at ${dest_file}"
@@ -76,8 +107,22 @@ download_image() {
         fi
     fi
     
-    log_info "Downloading Fedora ${version} cloud image..."
-    log_info "URL: ${download_url}"
+    log_info "Finding Fedora ${version} cloud image..."
+    
+    # Find the correct image name
+    local image_name
+    if ! image_name=$(find_image_name "$version"); then
+        log_error "Could not find Fedora ${version} cloud image"
+        log_info "Try a different version with: $0 --version 42"
+        log_info "Or download manually from: https://fedoraproject.org/cloud/download"
+        exit 1
+    fi
+    
+    local base_url="https://download.fedoraproject.org/pub/fedora/linux/releases"
+    local download_url="${base_url}/${version}/Cloud/x86_64/images/${image_name}"
+    
+    log_info "Found image: ${image_name}"
+    log_info "Downloading from: ${download_url}"
     
     # Create directory if needed
     sudo mkdir -p "$dest_dir"
@@ -85,11 +130,20 @@ download_image() {
     # Download to temp location first
     local temp_file="/tmp/fedora-cloud-download.qcow2"
     
-    if wget --progress=bar:force -O "$temp_file" "$download_url"; then
-        sudo mv "$temp_file" "$dest_file"
-        sudo chown root:root "$dest_file"
-        sudo chmod 644 "$dest_file"
-        log_success "Image downloaded to ${dest_file}"
+    # Use curl with better progress and redirect following
+    if curl -L --progress-bar -o "$temp_file" "$download_url"; then
+        # Verify it's a valid qcow2 image (not an error page)
+        if file "$temp_file" | grep -q "QEMU QCOW"; then
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
+            log_success "Image downloaded to ${dest_file}"
+        else
+            log_error "Downloaded file is not a valid QCOW2 image"
+            log_info "The file might be an error page. Try downloading manually."
+            rm -f "$temp_file"
+            exit 1
+        fi
     else
         log_error "Failed to download image"
         rm -f "$temp_file"
@@ -137,7 +191,7 @@ main() {
                 echo "Usage: $0 [--version VERSION] [--dir DIRECTORY]"
                 echo ""
                 echo "Options:"
-                echo "  --version, -v    Fedora version (default: 41)"
+                echo "  --version, -v    Fedora version (default: 42)"
                 echo "  --dir, -d        Image directory (default: /var/lib/libvirt/images)"
                 exit 0
                 ;;

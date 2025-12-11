@@ -282,7 +282,7 @@ create_vm() {
         --vcpus "$VCPUS" \
         --disk "$disk_path" \
         --disk "${cloudinit_iso},device=cdrom" \
-        --os-variant fedora41 \
+        --os-variant fedora-unknown \
         --network network=default \
         --graphics none \
         --console pty,target_type=serial \
