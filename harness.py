@@ -587,6 +587,67 @@ def stop(vm: str, force: bool):
 
 
 @cli.command()
+@click.option("--vm", "-v", help="Shutdown specific VM only")
+@click.option("--wait", "-w", is_flag=True, help="Wait for VMs to fully shutdown")
+def shutdown(vm: str, wait: bool):
+    """Gracefully shutdown test VMs (without destroying them)."""
+    console.print(Panel.fit(
+        "[bold blue]Shutting Down Test VMs[/]\n[dim]VMs will be gracefully shut down but not deleted[/]",
+        border_style="blue"
+    ))
+    
+    if vm:
+        vms = [vm]
+    else:
+        vms = get_vm_list()
+    
+    if not vms:
+        console.print("[yellow]No test VMs found[/]")
+        return
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"Shutting down {len(vms)} VMs...", total=len(vms))
+        
+        for vm_name in vms:
+            progress.update(task, description=f"Shutting down {vm_name}...")
+            # Use virsh shutdown for graceful shutdown
+            result = run_command(["virsh", "shutdown", vm_name], sudo=True, check=False)
+            if result.returncode != 0:
+                # Check if VM is already shut down
+                vm_info = get_vm_info(vm_name)
+                if vm_info.state not in ["shut off", "shutdown"]:
+                    console.print(f"[yellow]Warning: Failed to shutdown {vm_name}[/]")
+            progress.advance(task)
+    
+    if wait:
+        console.print("\n[dim]Waiting for VMs to fully shutdown...[/]")
+        import time
+        max_wait = 60  # Maximum 60 seconds
+        elapsed = 0
+        while elapsed < max_wait:
+            all_shut = True
+            for vm_name in vms:
+                vm_info = get_vm_info(vm_name)
+                if vm_info.state not in ["shut off", "shutdown"]:
+                    all_shut = False
+                    break
+            if all_shut:
+                break
+            time.sleep(2)
+            elapsed += 2
+        
+        if elapsed >= max_wait:
+            console.print("[yellow]Some VMs may still be shutting down[/]")
+    
+    console.print("[green]✓ VMs shutdown complete[/]")
+    console.print("[dim]VMs are stopped but not deleted. Use './harness.py start' to start them again.[/]")
+
+
+@cli.command()
 def ips():
     """List VM IP addresses (for scripting)."""
     vms = get_all_vm_info()

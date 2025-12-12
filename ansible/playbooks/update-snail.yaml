@@ -61,3 +61,4 @@
       ansible.builtin.debug:
         msg: "snail-core updated successfully on {{ inventory_hostname }}"
 
+
