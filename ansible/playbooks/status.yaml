@@ -60,3 +60,4 @@
           Config Exists: {{ config_file.stat.exists }}
           Local Reports: {{ local_reports.files | length }}
 
+

@@ -141,10 +141,26 @@ This will:
 ./harness.py update --force
 ```
 
-### 8. Clean Up
+### 8. Shutdown VMs (Without Deleting)
 
 ```bash
-# Destroy all VMs
+# Gracefully shutdown all VMs (VMs remain but are stopped)
+./harness.py shutdown
+
+# Shutdown and wait for completion
+./harness.py shutdown --wait
+
+# Shutdown specific VM
+./harness.py shutdown --vm snail-test-42-1
+
+# Start VMs again later
+./harness.py start
+```
+
+### 9. Clean Up
+
+```bash
+# Destroy all VMs (permanently deletes VM disks)
 ./harness.py destroy
 
 # Destroy with force (no confirmation)
@@ -160,10 +176,13 @@ This will:
 | `./harness.py create` | Create test VMs (default: 5 VMs for Fedora 42) |
 | `./harness.py create --versions 42,41,40` | Create VMs for specific Fedora versions |
 | `./harness.py list-versions` | List available Fedora versions |
-| `./harness.py destroy` | Remove all test VMs |
 | `./harness.py start` | Start all VMs |
+| `./harness.py shutdown` | Gracefully shutdown all VMs (without deleting them) |
+| `./harness.py shutdown --wait` | Shutdown and wait for completion |
+| `./harness.py shutdown --vm VM_NAME` | Shutdown specific VM only |
 | `./harness.py stop` | Gracefully stop all VMs |
-| `./harness.py stop --force` | Force stop all VMs |
+| `./harness.py stop --force` | Force stop all VMs (destroy) |
+| `./harness.py destroy` | Remove all test VMs (deletes VM disks) |
 | `./harness.py status` | Show VM status |
 | `./harness.py ips` | List VM IPs (for scripting) |
 
@@ -247,6 +266,19 @@ This will:
 # Or manually
 ssh -i ~/.ssh/snail-test-key snail@<VM_IP>
 ```
+
+### Shutdown vs Destroy
+
+**Shutdown** (`./harness.py shutdown`):
+- Gracefully stops VMs using ACPI shutdown
+- VMs remain on disk and can be started again with `./harness.py start`
+- Use this when you want to temporarily stop VMs to save resources
+- VM disks and configurations are preserved
+
+**Destroy** (`./harness.py destroy`):
+- Permanently deletes VMs and their disk images
+- Cannot be recovered - you'll need to recreate VMs
+- Use this when you're done testing and want to free up disk space
 
 ## Shell Scripts
 
