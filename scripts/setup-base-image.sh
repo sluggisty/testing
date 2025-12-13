@@ -168,8 +168,8 @@ find_centos_image_name() {
     local version="$1"
     
     # CentOS cloud images are at:
-    # https://cloud.centos.org/centos/{version}/x86_64/images/
-    # For CentOS Stream, use stream-{version}
+    # https://cloud.centos.org/centos/{version}-stream/x86_64/images/ (for Stream 9, 8)
+    # https://cloud.centos.org/centos/{version}/x86_64/images/ (for CentOS 7)
     local base_url
     if [[ "$version" == "9" || "$version" == "8" ]]; then
         base_url="https://cloud.centos.org/centos/${version}-stream/x86_64/images/"
@@ -178,9 +178,17 @@ find_centos_image_name() {
         base_url="https://cloud.centos.org/centos/${version}/x86_64/images/"
     fi
     
-    # Try to find the generic cloud image (QCOW2 format)
+    # CentOS Stream images are named like: CentOS-Stream-GenericCloud-9-20250101.0.x86_64.qcow2
+    # CentOS 7 images are named like: CentOS-7-x86_64-GenericCloud-*.qcow2
     local image_name
-    image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-[0-9]+[^"]*GenericCloud[^"]*\.qcow2' | head -1 || true)
+    
+    if [[ "$version" == "9" || "$version" == "8" ]]; then
+        # For Stream versions, look for CentOS-Stream-GenericCloud-{version}-*.qcow2
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-Stream-GenericCloud-'${version}'-[0-9]+[^"]*\.x86_64\.qcow2' | head -1 || true)
+    else
+        # For CentOS 7, look for CentOS-7-x86_64-GenericCloud-*.qcow2
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-'${version}'-x86_64-GenericCloud[^"]*\.qcow2' | head -1 || true)
+    fi
     
     if [[ -n "$image_name" ]]; then
         echo "$image_name"
@@ -188,20 +196,18 @@ find_centos_image_name() {
         return 0
     fi
     
-    # Fallback: try alternative naming patterns
-    for pattern in \
-        "CentOS-${version}-GenericCloud-*.qcow2" \
-        "CentOS-Stream-${version}-GenericCloud-*.qcow2" \
-        "CentOS-${version}-x86_64-GenericCloud-*.qcow2"; do
-        
-        local found_name
-        found_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE "$(echo "$pattern" | sed 's/\*/[^"]*/g')" | head -1 || true)
-        if [[ -n "$found_name" ]]; then
-            echo "$found_name"
-            echo "$base_url" > /tmp/centos_base_url_${version}
-            return 0
-        fi
-    done
+    # Fallback: try more generic patterns
+    if [[ "$version" == "9" || "$version" == "8" ]]; then
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-Stream[^"]*GenericCloud[^"]*\.qcow2' | grep -v "\.MD5SUM\|\.SHA" | head -1 || true)
+    else
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-'${version}'[^"]*GenericCloud[^"]*\.qcow2' | grep -v "\.MD5SUM\|\.SHA" | head -1 || true)
+    fi
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        echo "$base_url" > /tmp/centos_base_url_${version}
+        return 0
+    fi
     
     return 1
 }
@@ -484,6 +490,106 @@ download_ubuntu_image() {
         fi
         
         # Check QCOW2 magic bytes (Ubuntu .img files are actually QCOW2)
+        local magic_bytes
+        magic_bytes=$(head -c 4 "$temp_file" | od -An -tx1 | tr -d ' \n' || echo "")
+        local is_qcow2=false
+        if [[ "$magic_bytes" == "514649fb" ]]; then
+            is_qcow2=true
+        fi
+        
+        if [[ "$is_qcow2" == "true" ]]; then
+            if [[ $file_size -lt 104857600 ]]; then
+                log_warning "File size is small (${file_size} bytes). This might not be a complete image."
+            fi
+            
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
+            log_success "Image downloaded to ${dest_file}"
+        else
+            log_error "Downloaded file is not a valid QCOW2 image"
+            log_info "Magic bytes: ${magic_bytes} (expected: 514649fb)"
+            log_info "File type: $(file "$temp_file" || echo 'unknown')"
+            log_info "The file might be an error page or corrupted download."
+            rm -f "$temp_file"
+            exit 1
+        fi
+    else
+        log_error "Failed to download image"
+        log_info "URL might be incorrect or the file is no longer available"
+        rm -f "$temp_file"
+        exit 1
+    fi
+}
+
+# Download CentOS cloud image
+download_centos_image() {
+    local version="$1"
+    local dest_dir="$2"
+    local dest_file="${dest_dir}/centos-cloud-base-${version}.qcow2"
+    
+    if [[ -f "$dest_file" ]]; then
+        log_warning "Base image already exists at ${dest_file}"
+        read -p "Do you want to re-download? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Using existing image"
+            return 0
+        fi
+    fi
+    
+    log_info "Finding CentOS ${version} cloud image..."
+    
+    # Find the correct image name
+    local image_name
+    if ! image_name=$(find_centos_image_name "$version"); then
+        log_error "Could not find CentOS ${version} cloud image"
+        log_info "This version may be too old or no longer available."
+        log_info "Try a different version with: $0 --distro centos --version 9"
+        log_info "Or check: https://cloud.centos.org/"
+        exit 1
+    fi
+    
+    # Get base URL from temp file (set by find_centos_image_name)
+    local base_url
+    if [[ -f "/tmp/centos_base_url_${version}" ]]; then
+        base_url=$(cat "/tmp/centos_base_url_${version}")
+        rm -f "/tmp/centos_base_url_${version}"
+    else
+        # Fallback: construct URL from version
+        if [[ "$version" == "9" || "$version" == "8" ]]; then
+            base_url="https://cloud.centos.org/centos/${version}-stream/x86_64/images/"
+        else
+            base_url="https://cloud.centos.org/centos/${version}/x86_64/images/"
+        fi
+    fi
+    
+    local download_url="${base_url}${image_name}"
+    
+    log_info "Found image: ${image_name}"
+    log_info "Downloading from: ${download_url}"
+    
+    # Create directory if needed
+    sudo mkdir -p "$dest_dir"
+    
+    # Download to temp location first
+    local temp_file="/tmp/centos-cloud-download-${version}.qcow2"
+    
+    # Use curl with better progress and redirect following
+    if curl -L --progress-bar -f -o "$temp_file" "$download_url" 2>&1; then
+        # Verify it's a valid qcow2 image
+        local file_size
+        file_size=$(stat -f%z "$temp_file" 2>/dev/null || stat -c%s "$temp_file" 2>/dev/null || echo "0")
+        
+        # Check if it's HTML (error page)
+        if head -c 100 "$temp_file" | grep -q "<html\|<!DOCTYPE\|404\|Not Found\|Error"; then
+            log_error "Downloaded file appears to be an HTML error page"
+            log_info "The image may not be available for CentOS ${version}"
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        # Check QCOW2 magic bytes
         local magic_bytes
         magic_bytes=$(head -c 4 "$temp_file" | od -An -tx1 | tr -d ' \n' || echo "")
         local is_qcow2=false
