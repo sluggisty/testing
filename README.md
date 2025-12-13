@@ -1,6 +1,6 @@
 # Snail Core VM Testing Environment
 
-Automated testing infrastructure for snail-core using Fedora, Debian, and Ubuntu VMs. This environment creates and manages multiple VMs that clone, install, and run snail-core, reporting to a local snail-shell server.
+Automated testing infrastructure for snail-core using Fedora, Debian, Ubuntu, CentOS, and RHEL VMs. This environment creates and manages multiple VMs that clone, install, and run snail-core, reporting to a local snail-shell server.
 
 ## Overview
 
@@ -10,10 +10,12 @@ This testing harness:
   - **Fedora**: versions 42, 41, 40, 39, 38, 37, 36, 35, 34, 33
   - **Debian**: versions 12 (Bookworm), 11 (Bullseye), 10 (Buster), 9 (Stretch)
   - **Ubuntu**: versions 24.04 LTS (Noble), 22.04 LTS (Jammy), 20.04 LTS (Focal), 18.04 LTS (Bionic)
+  - **CentOS**: versions 9 (Stream), 8 (Stream), 7 (EOL)
+  - **RHEL**: versions 9.4, 9.3, 9.2, 9.1, 9, 8.10, 8.9, 8.8, 8, 7.9, 7 (requires Red Hat subscription)
 - Automatically clones and installs snail-core from GitHub
 - Configures VMs to report to `localhost:8080` on the host
 - Provides tools to manage, update, and execute commands on all VMs
-- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, etc.
+- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, `snail-test-centos-9-1`, `snail-test-rhel-9.4-1`, etc.
 
 ## Prerequisites
 
@@ -94,6 +96,31 @@ The server should be accessible at `http://localhost:8080`.
 ./scripts/setup-base-image.sh --distro ubuntu --version 24.04
 ./scripts/setup-base-image.sh --distro ubuntu --version 22.04
 ./scripts/setup-base-image.sh --distro ubuntu --version 20.04
+
+# Download CentOS base images
+./scripts/setup-base-image.sh --distro centos --version 9
+./scripts/setup-base-image.sh --distro centos --version 8
+
+# Download RHEL base images (requires Red Hat subscription)
+./scripts/setup-base-image.sh --distro rhel --version 9.4
+./scripts/setup-base-image.sh --distro rhel --version 8.10
+./scripts/setup-base-image.sh --distro rhel --version 9
+```
+
+**Note on RHEL Images:**
+RHEL cloud images require a Red Hat subscription and cannot be downloaded automatically. If the download fails, you'll need to:
+
+1. Log in to [Red Hat Customer Portal](https://access.redhat.com/downloads/content/rhel)
+2. Navigate to: Red Hat Enterprise Linux > [version] > Cloud Images
+3. Download the QCOW2 image (KVM/GenericCloud variant)
+4. Place it at: `/var/lib/libvirt/images/rhel-cloud-base-[version].qcow2`
+   - For version 9.4: `rhel-cloud-base-9_4.qcow2`
+   - For version 8.10: `rhel-cloud-base-8_10.qcow2`
+   - For version 9: `rhel-cloud-base-9.qcow2`
+
+**Alternative:** Use CentOS Stream (similar to RHEL, free and publicly available):
+```bash
+./scripts/setup-base-image.sh --distro centos --version 9
 ```
 
 ### 4. Create Test VMs
@@ -112,8 +139,16 @@ The server should be accessible at `http://localhost:8080`.
 ./harness.py create --specs ubuntu:24.04
 ./harness.py create --specs ubuntu:24.04,22.04
 
+# Create CentOS VMs
+./harness.py create --specs centos:9
+./harness.py create --specs centos:9,8
+
+# Create RHEL VMs (requires base images to be manually downloaded)
+./harness.py create --specs rhel:9.4
+./harness.py create --specs rhel:9.4,9.3,8.10
+
 # Create mixed distribution VMs
-./harness.py create --specs fedora:42,debian:12,ubuntu:24.04
+./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9.4
 
 # Create 3 VMs per version
 ./harness.py create --specs fedora:42,41 --count 3
@@ -133,9 +168,10 @@ This will:
 5. Wait for VMs to get IP addresses
 
 **Note:** 
-- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, etc.
+- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, `snail-test-centos-9-1`, `snail-test-rhel-9.4-1`, etc.
 - Initial setup takes 5-10 minutes per VM as they run system updates and install snail-core.
-- Fedora VMs use `dnf` for package management, Debian and Ubuntu VMs use `apt`.
+- Package managers: Fedora/CentOS/RHEL use `dnf`/`yum`, Debian/Ubuntu use `apt`.
+- RHEL images require Red Hat subscription - see "Download Base Images" section for manual download instructions.
 
 ### 5. Check VM Status
 
@@ -203,7 +239,9 @@ This will:
 | `./harness.py create --specs fedora:42,41` | Create VMs for specific Fedora versions |
 | `./harness.py create --specs debian:12,11` | Create VMs for specific Debian versions |
 | `./harness.py create --specs ubuntu:24.04,22.04` | Create VMs for specific Ubuntu versions |
-| `./harness.py create --specs fedora:42,debian:12,ubuntu:24.04` | Create mixed distribution VMs |
+| `./harness.py create --specs centos:9,8` | Create VMs for specific CentOS versions |
+| `./harness.py create --specs rhel:9.4,8.10` | Create VMs for specific RHEL versions (minor releases supported) |
+| `./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9.4` | Create mixed distribution VMs |
 | `./harness.py list-versions` | List available distributions and versions |
 | `./harness.py start` | Start all VMs |
 | `./harness.py shutdown` | Gracefully shutdown all VMs (without deleting them) |
@@ -404,12 +442,12 @@ snail_core:
 
 Each VM is configured with:
 
-- **OS:** Fedora Cloud (minimal) - version specified at creation
+- **OS:** Distribution and version specified at creation (Fedora, Debian, Ubuntu, CentOS, or RHEL)
 - **Resources:** 2GB RAM, 2 vCPUs, 15GB disk (configurable)
 - **User:** `snail` with sudo access
 - **Password:** `snailtest123` (for console access)
 - **SSH Key:** `~/.ssh/snail-test-key`
-- **Naming:** `snail-test-<version>-<number>` (e.g., `snail-test-42-1`, `snail-test-41-3`)
+- **Naming:** `snail-test-<distro>-<version>-<number>` (e.g., `snail-test-fedora-42-1`, `snail-test-rhel-9.4-1`, `snail-test-ubuntu-24.04-1`)
 
 ### Snail Core Setup in VMs
 
@@ -418,6 +456,38 @@ Each VM is configured with:
 - **Config:** `/etc/snail-core/config.yaml`
 - **Binary:** `/usr/local/bin/snail` (symlink)
 - **Service:** `snail-core.timer` (runs every 5 minutes)
+- **Additional Packages:** `openscap-scanner`, `scap-security-guide`, and `trivy` are installed by default
+
+## Distribution-Specific Notes
+
+### RHEL Minor Releases
+
+RHEL supports both major and minor releases:
+- **Major releases:** `9`, `8`, `7` (downloads latest minor)
+- **Minor releases:** `9.4`, `9.3`, `8.10`, `8.9`, etc. (specific versions)
+
+When using minor releases, image filenames use underscores:
+- Version `9.4` → `rhel-cloud-base-9_4.qcow2`
+- Version `8.10` → `rhel-cloud-base-8_10.qcow2`
+
+### RHEL Subscription Requirements
+
+RHEL cloud images require a Red Hat subscription. The script will:
+1. Check if the image already exists locally (if manually downloaded)
+2. Attempt automatic download (will fail without subscription)
+3. Provide clear instructions for manual download
+
+**Manual Download Steps:**
+1. Visit: https://access.redhat.com/downloads/content/rhel
+2. Navigate to: Red Hat Enterprise Linux > [version] > Cloud Images
+3. Download: QCOW2 (KVM/GenericCloud) variant
+4. Place at: `/var/lib/libvirt/images/rhel-cloud-base-[version].qcow2`
+
+**Alternative:** Use CentOS Stream (free, similar to RHEL):
+```bash
+./scripts/setup-base-image.sh --distro centos --version 9
+./harness.py create --specs centos:9
+```
 
 ## Troubleshooting
 
@@ -493,7 +563,7 @@ testing/
 ├── harness.py                # Main CLI tool
 ├── vm-list.txt               # List of created VMs (generated)
 ├── scripts/
-│   ├── setup-base-image.sh   # Download Fedora cloud image
+│   ├── setup-base-image.sh   # Download cloud images (Fedora, Debian, Ubuntu, CentOS, RHEL)
 │   ├── create-vms.sh         # Create VMs with cloud-init
 │   ├── destroy-vms.sh        # Remove VMs
 │   └── get-vm-ips.sh         # Get VM IP addresses
