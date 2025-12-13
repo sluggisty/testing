@@ -338,6 +338,92 @@ find_centos_image_name() {
     return 1
 }
 
+# Find the correct SUSE image name
+find_suse_image_name() {
+    local version="$1"
+    
+    # openSUSE Leap images are at:
+    # https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.5/images/
+    # Or: https://download.opensuse.org/distribution/leap/15.5/appliances/
+    # SLES images require subscription and are at different locations
+    
+    local base_url
+    local is_sles=false
+    
+    # Check if this is SLES (starts with "sles")
+    if [[ "$version" == sles* ]]; then
+        is_sles=true
+        # Extract version number (sles15.5 -> 15.5)
+        version="${version#sles}"
+    fi
+    
+    if [[ "$version" == "tumbleweed" ]]; then
+        # openSUSE Tumbleweed (rolling release)
+        base_url="https://download.opensuse.org/repositories/Cloud:/Images:/Leap_Tumbleweed/images/"
+    elif [[ "$is_sles" == "true" ]]; then
+        # SLES images - may require subscription
+        # Try common SLES image locations
+        base_url="https://scc.suse.com/sles/${version}/x86_64/cloud/"
+        log_warning "SLES images may require SUSE subscription"
+    else
+        # openSUSE Leap
+        base_url="https://download.opensuse.org/repositories/Cloud:/Images:/Leap_${version}/images/"
+    fi
+    
+    # Try to find image
+    # openSUSE images are typically named: openSUSE-Leap-15.5-OpenStack.x86_64.qcow2
+    # Or: openSUSE-Leap-15.5-JeOS.x86_64.qcow2
+    # Or: openSUSE-Leap-15.5-KVM.x86_64.qcow2
+    local image_name
+    
+    # Try OpenStack variant first (most common for cloud)
+    if [[ "$version" == "tumbleweed" ]]; then
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'openSUSE-Tumbleweed[^"]*\.x86_64\.qcow2' | grep -v '\.MD5SUM\|\.SHA' | head -1 || true)
+    elif [[ "$is_sles" == "true" ]]; then
+        # SLES images: SLE-15-SP5-EC2-HVM-BYOS.x86_64.qcow2 or similar
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'SLE[^"]*\.x86_64\.qcow2' | grep -v '\.MD5SUM\|\.SHA' | head -1 || true)
+    else
+        # openSUSE Leap - try multiple variants
+        for variant in "OpenStack" "JeOS" "KVM"; do
+            image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE "openSUSE-Leap-${version}-${variant}[^\"]*\.x86_64\.qcow2" | grep -v '\.MD5SUM\|\.SHA' | head -1 || true)
+            if [[ -n "$image_name" ]]; then
+                break
+            fi
+        done
+    fi
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        local version_key="${version//./_}"
+        if [[ "$is_sles" == "true" ]]; then
+            echo "$base_url" > /tmp/suse_sles_base_url_${version_key}
+        else
+            echo "$base_url" > /tmp/suse_base_url_${version_key}
+        fi
+        return 0
+    fi
+    
+    # If not found, try alternative locations
+    if [[ "$is_sles" != "true" && "$version" != "tumbleweed" ]]; then
+        # Try appliances directory
+        local alt_url="https://download.opensuse.org/distribution/leap/${version}/appliances/"
+        image_name=$(curl -sL "$alt_url" 2>/dev/null | grep -oE "openSUSE-Leap-${version}[^\"]*\.x86_64\.qcow2" | grep -v '\.MD5SUM\|\.SHA' | head -1 || true)
+        if [[ -n "$image_name" ]]; then
+            echo "$image_name"
+            local version_key="${version//./_}"
+            echo "$alt_url" > /tmp/suse_base_url_${version_key}
+            return 0
+        fi
+    fi
+    
+    if [[ "$is_sles" == "true" ]]; then
+        log_warning "SLES images require SUSE subscription"
+        log_info "You may need to download manually from: https://scc.suse.com"
+    fi
+    
+    return 1
+}
+
 # Find the correct image name from Fedora's directory listing
 find_fedora_image_name() {
     local version="$1"
@@ -643,6 +729,156 @@ download_ubuntu_image() {
     else
         log_error "Failed to download image"
         log_info "URL might be incorrect or the file is no longer available"
+        rm -f "$temp_file"
+        exit 1
+    fi
+}
+
+# Download SUSE cloud image
+download_suse_image() {
+    local version="$1"
+    local dest_dir="$2"
+    
+    # Handle version key (convert dots to underscores, handle SLES prefix)
+    local version_key="${version//./_}"
+    local is_sles=false
+    if [[ "$version" == sles* ]]; then
+        is_sles=true
+        version_key="sles_${version_key#sles}"
+    fi
+    
+    local dest_file="${dest_dir}/suse-cloud-base-${version_key}.qcow2"
+    
+    # Check if image already exists
+    if [[ -f "$dest_file" ]]; then
+        log_success "SUSE image already exists at ${dest_file}"
+        log_info "Using existing image. If you want to re-download, delete the file first."
+        return 0
+    fi
+    
+    log_info "Finding SUSE ${version} cloud image..."
+    
+    # Check if this is SLES (starts with "sles")
+    if [[ "$version" == sles* ]]; then
+        is_sles=true
+        log_warning "Note: SLES images may require SUSE subscription to download"
+    fi
+    
+    # Find the correct image name
+    local image_name
+    if ! image_name=$(find_suse_image_name "$version"); then
+        log_error "Could not download SUSE ${version} cloud image automatically"
+        log_info ""
+        if [[ "$is_sles" == "true" ]]; then
+            log_info "SLES images require SUSE subscription and cannot be downloaded automatically."
+            log_info ""
+            log_info "To use SLES images:"
+            log_info "  1. Download manually from: https://scc.suse.com/"
+            log_info "     (Requires SUSE account with active subscription)"
+            log_info "  2. Look for: SUSE Linux Enterprise Server > ${version#sles} > Cloud Images"
+            log_info "  3. Download the QCOW2 image"
+            log_info "  4. Place it at: ${dest_file}"
+            log_info ""
+            log_info "Alternative: Use openSUSE Leap (free, similar to SLES):"
+            log_info "  $0 --distro suse --version ${version#sles}"
+        else
+            log_info "This version may be too old or no longer available."
+            log_info "Try a different version with: $0 --distro suse --version 15.5"
+            log_info "Or check: https://download.opensuse.org/repositories/Cloud:/Images:/"
+        fi
+        exit 1
+    fi
+    
+    # Get base URL from temp file (set by find_suse_image_name)
+    local base_url
+    if [[ "$is_sles" == "true" ]]; then
+        if [[ -f "/tmp/suse_sles_base_url_${version_key#sles_}" ]]; then
+            base_url=$(cat "/tmp/suse_sles_base_url_${version_key#sles_}")
+            rm -f "/tmp/suse_sles_base_url_${version_key#sles_}"
+        else
+            base_url="https://scc.suse.com/sles/${version#sles}/x86_64/cloud/"
+        fi
+    else
+        if [[ -f "/tmp/suse_base_url_${version_key}" ]]; then
+            base_url=$(cat "/tmp/suse_base_url_${version_key}")
+            rm -f "/tmp/suse_base_url_${version_key}"
+        else
+            if [[ "$version" == "tumbleweed" ]]; then
+                base_url="https://download.opensuse.org/repositories/Cloud:/Images:/Leap_Tumbleweed/images/"
+            else
+                base_url="https://download.opensuse.org/repositories/Cloud:/Images:/Leap_${version}/images/"
+            fi
+        fi
+    fi
+    
+    local download_url="${base_url}${image_name}"
+    
+    log_info "Found image: ${image_name}"
+    log_info "Downloading from: ${download_url}"
+    
+    # Create directory if needed
+    sudo mkdir -p "$dest_dir"
+    
+    # Download to temp location first
+    local temp_file="/tmp/suse-cloud-download-${version_key}.qcow2"
+    
+    # Use curl with better progress and redirect following
+    if curl -L --progress-bar -f -o "$temp_file" "$download_url" 2>&1; then
+        # Verify it's a valid qcow2 image
+        local file_size
+        file_size=$(stat -f%z "$temp_file" 2>/dev/null || stat -c%s "$temp_file" 2>/dev/null || echo "0")
+        
+        # Check if it's HTML (error page or login page)
+        if head -c 100 "$temp_file" | grep -q "<html\|<!DOCTYPE\|404\|Not Found\|Error\|login\|Login\|SUSE"; then
+            log_error "Downloaded file appears to be an HTML error page or access denied."
+            if [[ "$is_sles" == "true" ]]; then
+                log_info "This likely means you need a SUSE subscription to download this image."
+                log_info "Download manually from: https://scc.suse.com/"
+                log_info "Then place the qcow2 image at: ${dest_file}"
+            else
+                log_info "The image may not be available for this version."
+            fi
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        # Check if it's a valid QCOW2 image
+        local is_qcow2=false
+        if command -v hexdump &> /dev/null; then
+            local magic
+            magic=$(hexdump -n 4 -e '4/1 "%02x"' "$temp_file" 2>/dev/null || echo "")
+            if [[ "$magic" == "514649fb" ]]; then
+                is_qcow2=true
+            fi
+        fi
+        
+        if file "$temp_file" 2>/dev/null | grep -qE "QEMU QCOW|QCOW"; then
+            is_qcow2=true
+        fi
+        
+        if [[ "$is_qcow2" == "true" ]]; then
+            if [[ $file_size -lt 104857600 ]]; then
+                log_warning "File size is small (${file_size} bytes). This might not be a complete image."
+            fi
+            
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
+            log_success "Image downloaded to ${dest_file}"
+        else
+            log_error "Downloaded file is not a valid QCOW2 image"
+            log_info "Magic bytes: ${magic} (expected: 514649fb)"
+            log_info "File type: $(file "$temp_file" || echo 'unknown')"
+            log_info "The file might be an error page or corrupted download."
+            rm -f "$temp_file"
+            exit 1
+        fi
+    else
+        log_error "Failed to download image"
+        log_info "URL might be incorrect or the file is no longer available"
+        if [[ "$is_sles" == "true" ]]; then
+            log_info "SLES images require SUSE subscription. Download manually from: https://scc.suse.com/"
+        fi
         rm -f "$temp_file"
         exit 1
     fi
@@ -1043,7 +1279,7 @@ main() {
                 echo "Usage: $0 [--distro DISTRO] [--version VERSION] [--dir DIRECTORY]"
                 echo ""
                 echo "Options:"
-                echo "  --distro, -d     Distribution: fedora, debian, ubuntu, centos, or rhel (default: fedora)"
+                echo "  --distro, -d     Distribution: fedora, debian, ubuntu, centos, rhel, or suse (default: fedora)"
                 echo "  --version, -v    Version number (default: 42 for fedora, 12 for debian)"
                 echo "  --dir            Image directory (default: /var/lib/libvirt/images)"
                 echo ""
@@ -1053,6 +1289,7 @@ main() {
                 echo "  $0 --distro ubuntu --version 24.04"
                 echo "  $0 --distro centos --version 9"
                 echo "  $0 --distro rhel --version 9"
+                echo "  $0 --distro suse --version 15.5"
                 exit 0
                 ;;
             *)
@@ -1065,9 +1302,9 @@ main() {
     # Normalize distro name
     DISTRO=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
     
-    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" && "$DISTRO" != "centos" && "$DISTRO" != "rhel" ]]; then
+    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" && "$DISTRO" != "centos" && "$DISTRO" != "rhel" && "$DISTRO" != "suse" ]]; then
         log_error "Unsupported distribution: $DISTRO"
-        log_info "Supported distributions: fedora, debian, ubuntu, centos, rhel"
+        log_info "Supported distributions: fedora, debian, ubuntu, centos, rhel, suse"
         exit 1
     fi
     
@@ -1103,6 +1340,16 @@ main() {
         verify_image "${IMAGE_DIR}/rhel-cloud-base-${version_key}.qcow2"
         log_success "RHEL base image setup complete!"
         echo "Base image location: ${IMAGE_DIR}/rhel-cloud-base-${version_key}.qcow2"
+    elif [[ "$DISTRO" == "suse" ]]; then
+        download_suse_image "$VERSION" "$IMAGE_DIR"
+        local version_key="${VERSION//./_}"
+        # Handle SLES prefix
+        if [[ "$VERSION" == sles* ]]; then
+            version_key="sles_${version_key#sles}"
+        fi
+        verify_image "${IMAGE_DIR}/suse-cloud-base-${version_key}.qcow2"
+        log_success "SUSE base image setup complete!"
+        echo "Base image location: ${IMAGE_DIR}/suse-cloud-base-${version_key}.qcow2"
     else
         log_error "Unsupported distribution: $DISTRO"
         exit 1

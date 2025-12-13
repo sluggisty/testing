@@ -1,6 +1,6 @@
 # Snail Core VM Testing Environment
 
-Automated testing infrastructure for snail-core using Fedora, Debian, Ubuntu, CentOS, and RHEL VMs. This environment creates and manages multiple VMs that clone, install, and run snail-core, reporting to a local snail-shell server.
+Automated testing infrastructure for snail-core using Fedora, Debian, Ubuntu, CentOS, RHEL, and SUSE VMs. This environment creates and manages multiple VMs that clone, install, and run snail-core, reporting to a local snail-shell server.
 
 ## Overview
 
@@ -12,10 +12,11 @@ This testing harness:
   - **Ubuntu**: versions 24.04 LTS (Noble), 22.04 LTS (Jammy), 20.04 LTS (Focal), 18.04 LTS (Bionic)
   - **CentOS**: versions 9 (Stream), 8 (Stream), 7 (EOL)
   - **RHEL**: versions 9.4, 9.3, 9.2, 9.1, 9, 8.10, 8.9, 8.8, 8, 7.9, 7 (requires Red Hat subscription)
+  - **SUSE**: openSUSE Leap 15.5, 15.4, 15.3, 15.2, Tumbleweed (rolling), SLES 15.5, 15.4, 15.3 (SLES requires SUSE subscription)
 - Automatically clones and installs snail-core from GitHub
 - Configures VMs to report to `localhost:8080` on the host
 - Provides tools to manage, update, and execute commands on all VMs
-- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, `snail-test-centos-9-1`, `snail-test-rhel-9.4-1`, etc.
+- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, `snail-test-centos-9-1`, `snail-test-rhel-9.4-1`, `snail-test-suse-15.5-1`, etc.
 
 ## Prerequisites
 
@@ -105,6 +106,13 @@ The server should be accessible at `http://localhost:8080`.
 ./scripts/setup-base-image.sh --distro rhel --version 9.4
 ./scripts/setup-base-image.sh --distro rhel --version 8.10
 ./scripts/setup-base-image.sh --distro rhel --version 9
+
+# Download SUSE base images
+./scripts/setup-base-image.sh --distro suse --version 15.5
+./scripts/setup-base-image.sh --distro suse --version 15.4
+./scripts/setup-base-image.sh --distro suse --version tumbleweed
+# SLES images (requires SUSE subscription)
+./scripts/setup-base-image.sh --distro suse --version sles15.5
 ```
 
 **Note on RHEL Images:**
@@ -121,6 +129,22 @@ RHEL cloud images require a Red Hat subscription and cannot be downloaded automa
 **Alternative:** Use CentOS Stream (similar to RHEL, free and publicly available):
 ```bash
 ./scripts/setup-base-image.sh --distro centos --version 9
+```
+
+**Note on SUSE Images:**
+- **openSUSE Leap**: Free and publicly available. Versions like `15.5`, `15.4`, `15.3`, `15.2` are supported.
+- **openSUSE Tumbleweed**: Rolling release, use version `tumbleweed`.
+- **SLES (SUSE Linux Enterprise Server)**: Requires SUSE subscription. Use versions like `sles15.5`, `sles15.4`, `sles15.3`. If automatic download fails, you'll need to:
+  1. Log in to [SUSE Customer Center](https://scc.suse.com/)
+  2. Navigate to: SUSE Linux Enterprise Server > [version] > Cloud Images
+  3. Download the QCOW2 image
+  4. Place it at: `/var/lib/libvirt/images/suse-cloud-base-sles_[version].qcow2`
+     - For version sles15.5: `suse-cloud-base-sles_15_5.qcow2`
+     - For version sles15.4: `suse-cloud-base-sles_15_4.qcow2`
+
+**Alternative:** Use openSUSE Leap (free, similar to SLES):
+```bash
+./scripts/setup-base-image.sh --distro suse --version 15.5
 ```
 
 ### 4. Create Test VMs
@@ -147,8 +171,15 @@ RHEL cloud images require a Red Hat subscription and cannot be downloaded automa
 ./harness.py create --specs rhel:9.4
 ./harness.py create --specs rhel:9.4,9.3,8.10
 
+# Create SUSE VMs
+./harness.py create --specs suse:15.5
+./harness.py create --specs suse:15.5,15.4
+./harness.py create --specs suse:tumbleweed
+# SLES VMs (requires base images to be manually downloaded)
+./harness.py create --specs suse:sles15.5
+
 # Create mixed distribution VMs
-./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9.4
+./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9.4,suse:15.5
 
 # Create 3 VMs per version
 ./harness.py create --specs fedora:42,41 --count 3
@@ -168,10 +199,11 @@ This will:
 5. Wait for VMs to get IP addresses
 
 **Note:** 
-- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, `snail-test-centos-9-1`, `snail-test-rhel-9.4-1`, etc.
+- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, `snail-test-ubuntu-24.04-1`, `snail-test-centos-9-1`, `snail-test-rhel-9.4-1`, `snail-test-suse-15.5-1`, etc.
 - Initial setup takes 5-10 minutes per VM as they run system updates and install snail-core.
-- Package managers: Fedora/CentOS/RHEL use `dnf`/`yum`, Debian/Ubuntu use `apt`.
+- Package managers: Fedora/CentOS/RHEL use `dnf`/`yum`, Debian/Ubuntu use `apt`, SUSE uses `zypper`.
 - RHEL images require Red Hat subscription - see "Download Base Images" section for manual download instructions.
+- SLES images require SUSE subscription - see "Download Base Images" section for manual download instructions.
 
 ### 5. Check VM Status
 
@@ -241,7 +273,10 @@ This will:
 | `./harness.py create --specs ubuntu:24.04,22.04` | Create VMs for specific Ubuntu versions |
 | `./harness.py create --specs centos:9,8` | Create VMs for specific CentOS versions |
 | `./harness.py create --specs rhel:9.4,8.10` | Create VMs for specific RHEL versions (minor releases supported) |
-| `./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9.4` | Create mixed distribution VMs |
+| `./harness.py create --specs suse:15.5,15.4` | Create VMs for specific SUSE versions (openSUSE Leap) |
+| `./harness.py create --specs suse:tumbleweed` | Create VMs for openSUSE Tumbleweed (rolling release) |
+| `./harness.py create --specs suse:sles15.5` | Create VMs for SLES (requires subscription) |
+| `./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9.4,suse:15.5` | Create mixed distribution VMs |
 | `./harness.py list-versions` | List available distributions and versions |
 | `./harness.py start` | Start all VMs |
 | `./harness.py shutdown` | Gracefully shutdown all VMs (without deleting them) |
@@ -487,6 +522,25 @@ RHEL cloud images require a Red Hat subscription. The script will:
 ```bash
 ./scripts/setup-base-image.sh --distro centos --version 9
 ./harness.py create --specs centos:9
+```
+
+### SUSE Subscription Requirements
+
+SUSE Linux Enterprise Server (SLES) images require a SUSE subscription. The script will:
+1. Check if the image already exists locally (if manually downloaded)
+2. Attempt automatic download (will fail without subscription)
+3. Provide clear instructions for manual download
+
+**Manual Download Steps:**
+1. Visit: https://scc.suse.com/
+2. Navigate to: SUSE Linux Enterprise Server > [version] > Cloud Images
+3. Download: QCOW2 image
+4. Place at: `/var/lib/libvirt/images/suse-cloud-base-sles_[version].qcow2`
+
+**Alternative:** Use openSUSE Leap (free, similar to SLES):
+```bash
+./scripts/setup-base-image.sh --distro suse --version 15.5
+./harness.py create --specs suse:15.5
 ```
 
 ## Troubleshooting
