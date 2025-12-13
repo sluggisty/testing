@@ -1,16 +1,18 @@
 # Snail Core VM Testing Environment
 
-Automated testing infrastructure for snail-core using Fedora VMs. This environment creates and manages multiple Fedora VMs that clone, install, and run snail-core, reporting to a local snail-shell server.
+Automated testing infrastructure for snail-core using Fedora and Debian VMs. This environment creates and manages multiple VMs that clone, install, and run snail-core, reporting to a local snail-shell server.
 
 ## Overview
 
 This testing harness:
-- Creates multiple Fedora VMs (default: 5 per version) using libvirt/KVM
-- Supports testing across multiple Fedora versions (42, 41, 40, 39, 38, 37, 36, 35, 34, 33)
+- Creates multiple VMs (default: 5 per version) using libvirt/KVM
+- Supports testing across multiple distributions:
+  - **Fedora**: versions 42, 41, 40, 39, 38, 37, 36, 35, 34, 33
+  - **Debian**: versions 12 (Bookworm), 11 (Bullseye), 10 (Buster), 9 (Stretch)
 - Automatically clones and installs snail-core from GitHub
 - Configures VMs to report to `localhost:8080` on the host
 - Provides tools to manage, update, and execute commands on all VMs
-- VM names include version: `snail-test-42-1`, `snail-test-41-1`, etc.
+- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, etc.
 
 ## Prerequisites
 
@@ -67,21 +69,25 @@ make run
 
 The server should be accessible at `http://localhost:8080`.
 
-### 2. List Available Fedora Versions
+### 2. List Available Distributions and Versions
 
 ```bash
-# See which Fedora versions are available and which base images are downloaded
+# See which distributions and versions are available and which base images are downloaded
 ./harness.py list-versions
 ```
 
 ### 3. Download Base Images
 
 ```bash
-# Download base images for specific Fedora versions
-./scripts/setup-base-image.sh --version 42
-./scripts/setup-base-image.sh --version 41
-./scripts/setup-base-image.sh --version 40
-# ... etc
+# Download Fedora base images
+./scripts/setup-base-image.sh --distro fedora --version 42
+./scripts/setup-base-image.sh --distro fedora --version 41
+./scripts/setup-base-image.sh --distro fedora --version 40
+
+# Download Debian base images
+./scripts/setup-base-image.sh --distro debian --version 12
+./scripts/setup-base-image.sh --distro debian --version 11
+./scripts/setup-base-image.sh --distro debian --version 10
 ```
 
 ### 4. Create Test VMs
@@ -91,13 +97,22 @@ The server should be accessible at `http://localhost:8080`.
 ./harness.py create
 
 # Create VMs for multiple Fedora versions
-./harness.py create --versions 42,41,40,39,38
+./harness.py create --specs fedora:42,41,40,39,38
 
-# Create 3 VMs per version for specific versions
-./harness.py create --versions 42,41 --count 3
+# Create Debian VMs
+./harness.py create --specs debian:12,11
+
+# Create mixed distribution VMs
+./harness.py create --specs fedora:42,debian:12
+
+# Create 3 VMs per version
+./harness.py create --specs fedora:42,41 --count 3
 
 # Custom resources
-./harness.py create --versions 42,41 --memory 1024 --cpus 1
+./harness.py create --specs fedora:42,41 --memory 1024 --cpus 1
+
+# Legacy format (still supported for Fedora)
+./harness.py create --versions 42,41,40
 ```
 
 This will:
@@ -108,8 +123,9 @@ This will:
 5. Wait for VMs to get IP addresses
 
 **Note:** 
-- VM names include version: `snail-test-42-1`, `snail-test-42-2`, `snail-test-41-1`, etc.
-- Initial setup takes 5-10 minutes per VM as they run dnf updates and install snail-core.
+- VM names include distribution and version: `snail-test-fedora-42-1`, `snail-test-debian-12-1`, etc.
+- Initial setup takes 5-10 minutes per VM as they run system updates and install snail-core.
+- Fedora VMs use `dnf` for package management, Debian VMs use `apt`.
 
 ### 5. Check VM Status
 
@@ -174,8 +190,10 @@ This will:
 | Command | Description |
 |---------|-------------|
 | `./harness.py create` | Create test VMs (default: 5 VMs for Fedora 42) |
-| `./harness.py create --versions 42,41,40` | Create VMs for specific Fedora versions |
-| `./harness.py list-versions` | List available Fedora versions |
+| `./harness.py create --specs fedora:42,41` | Create VMs for specific Fedora versions |
+| `./harness.py create --specs debian:12,11` | Create VMs for specific Debian versions |
+| `./harness.py create --specs fedora:42,debian:12` | Create mixed distribution VMs |
+| `./harness.py list-versions` | List available distributions and versions |
 | `./harness.py start` | Start all VMs |
 | `./harness.py shutdown` | Gracefully shutdown all VMs (without deleting them) |
 | `./harness.py shutdown --wait` | Shutdown and wait for completion |

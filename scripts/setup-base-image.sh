@@ -1,6 +1,6 @@
 #!/bin/bash
-# setup-base-image.sh - Download and prepare Fedora cloud base image
-# ==================================================================
+# setup-base-image.sh - Download and prepare cloud base images (Fedora/Debian)
+# ============================================================================
 
 set -euo pipefail
 
@@ -11,9 +11,15 @@ TESTING_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="${TESTING_DIR}/config.yaml"
 
 # Default values (can be overridden by config)
-FEDORA_VERSION="${FEDORA_VERSION:-42}"
+DISTRO="${DISTRO:-fedora}"
+VERSION="${VERSION:-42}"
 IMAGE_DIR="${IMAGE_DIR:-/var/lib/libvirt/images}"
-BASE_IMAGE_NAME="fedora-cloud-base-${FEDORA_VERSION}.qcow2"
+
+# Expand relative paths relative to testing directory
+if [[ "$IMAGE_DIR" != /* ]]; then
+    IMAGE_DIR="${TESTING_DIR}/${IMAGE_DIR}"
+fi
+IMAGE_DIR=$(eval echo "$IMAGE_DIR")
 
 # Colors for output
 RED='\033[0;31m'
@@ -38,6 +44,21 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Check if directory is user-writable (doesn't need sudo)
+is_user_writable() {
+    local dir="$1"
+    # Expand ~ and resolve relative paths
+    dir=$(eval echo "$dir")
+    dir=$(cd "$(dirname "$dir")" 2>/dev/null && pwd)/$(basename "$dir")
+    
+    # Check if we can write to the directory (or its parent if it doesn't exist)
+    local test_dir="$dir"
+    [[ ! -d "$test_dir" ]] && test_dir="$(dirname "$test_dir")"
+    
+    [[ -w "$test_dir" ]] 2>/dev/null && return 0
+    return 1
+}
+
 # Check for required tools
 check_requirements() {
     local missing=()
@@ -55,8 +76,59 @@ check_requirements() {
     fi
 }
 
+# Find the correct Debian image name
+find_debian_image_name() {
+    local version="$1"
+    
+    # Debian version to codename mapping
+    local codename=""
+    case "$version" in
+        "12") codename="bookworm" ;;
+        "11") codename="bullseye" ;;
+        "10") codename="buster" ;;
+        "9") codename="stretch" ;;
+        *)
+            log_error "Unsupported Debian version: $version"
+            return 1
+            ;;
+    esac
+    
+    # Debian cloud images are at:
+    # https://cloud.debian.org/images/cloud/<codename>/latest/
+    local base_url="https://cloud.debian.org/images/cloud/${codename}/latest/"
+    
+    # Try to find the generic cloud image
+    local image_name
+    image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'debian-[0-9]+-generic[^"]*\.qcow2' | head -1 || true)
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        echo "$base_url" > /tmp/debian_base_url_${version}
+        return 0
+    fi
+    
+    # Fallback: try common naming patterns
+    for pattern in \
+        "debian-${version}-generic-amd64-*.qcow2" \
+        "debian-${version}-genericcloud-amd64-*.qcow2" \
+        "debian-${codename}-generic-amd64-*.qcow2" \
+        "debian-${codename}-genericcloud-amd64-*.qcow2"; do
+        
+        # Try to find actual file matching pattern
+        local found_name
+        found_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE "$(echo "$pattern" | sed 's/\*/[^"]*/g')" | head -1 || true)
+        if [[ -n "$found_name" ]]; then
+            echo "$found_name"
+            echo "$base_url" > /tmp/debian_base_url_${version}
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Find the correct image name from Fedora's directory listing
-find_image_name() {
+find_fedora_image_name() {
     local version="$1"
     
     # Determine which location to try first
@@ -148,8 +220,133 @@ find_image_name() {
     return 1
 }
 
+# Download Debian cloud image
+download_debian_image() {
+    local version="$1"
+    local dest_dir="$2"
+    local dest_file="${dest_dir}/debian-cloud-base-${version}.qcow2"
+    
+    if [[ -f "$dest_file" ]]; then
+        log_warning "Base image already exists at ${dest_file}"
+        read -p "Do you want to re-download? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Using existing image"
+            return 0
+        fi
+    fi
+    
+    log_info "Finding Debian ${version} cloud image..."
+    
+    # Find the correct image name
+    local image_name
+    if ! image_name=$(find_debian_image_name "$version"); then
+        log_error "Could not find Debian ${version} cloud image"
+        log_info "This version may be too old or no longer available."
+        log_info "Try a different version with: $0 --distro debian --version 12"
+        log_info "Or check: https://cloud.debian.org/images/cloud/"
+        exit 1
+    fi
+    
+    # Get base URL from temp file (set by find_debian_image_name)
+    local base_url
+    if [[ -f "/tmp/debian_base_url_${version}" ]]; then
+        base_url=$(cat "/tmp/debian_base_url_${version}")
+        rm -f "/tmp/debian_base_url_${version}"
+    else
+        # Fallback: construct URL from version
+        local codename=""
+        case "$version" in
+            "12") codename="bookworm" ;;
+            "11") codename="bullseye" ;;
+            "10") codename="buster" ;;
+            "9") codename="stretch" ;;
+        esac
+        base_url="https://cloud.debian.org/images/cloud/${codename}/latest/"
+    fi
+    
+    local download_url="${base_url}${image_name}"
+    
+    log_info "Found image: ${image_name}"
+    log_info "Downloading from: ${download_url}"
+    
+    # Expand and resolve directory path
+    dest_dir=$(eval echo "$dest_dir")
+    dest_dir=$(cd "$(dirname "$dest_dir")" 2>/dev/null && pwd)/$(basename "$dest_dir") 2>/dev/null || echo "$dest_dir"
+    
+    # Create directory if needed (use sudo only if not user-writable)
+    if is_user_writable "$dest_dir"; then
+        mkdir -p "$dest_dir"
+    else
+        sudo mkdir -p "$dest_dir"
+    fi
+    
+    # Download to temp location first
+    local temp_file="/tmp/debian-cloud-download-${version}.qcow2"
+    
+    # Use curl with better progress and redirect following
+    if curl -L --progress-bar -f -o "$temp_file" "$download_url" 2>&1; then
+        # Verify it's a valid qcow2 image
+        local file_size
+        file_size=$(stat -f%z "$temp_file" 2>/dev/null || stat -c%s "$temp_file" 2>/dev/null || echo "0")
+        
+        # Check if it's HTML (error page)
+        if head -c 100 "$temp_file" | grep -q "<html\|<!DOCTYPE\|404\|Not Found\|Error"; then
+            log_error "Downloaded file appears to be an HTML error page"
+            log_info "The image may not be available for Debian ${version}"
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        # Check if it's a QCOW2 file
+        local is_qcow2=false
+        if command -v hexdump &> /dev/null; then
+            local magic
+            magic=$(hexdump -n 4 -e '4/1 "%02x"' "$temp_file" 2>/dev/null || echo "")
+            if [[ "$magic" == "514649fb" ]]; then
+                is_qcow2=true
+            fi
+        elif command -v od &> /dev/null; then
+            local magic
+            magic=$(od -An -tx1 -N 4 "$temp_file" 2>/dev/null | tr -d ' \n' || echo "")
+            if [[ "$magic" == "514649fb" ]]; then
+                is_qcow2=true
+            fi
+        fi
+        
+        if file "$temp_file" 2>/dev/null | grep -qE "QEMU QCOW|QCOW"; then
+            is_qcow2=true
+        fi
+        
+        if [[ "$is_qcow2" == "true" ]]; then
+            if [[ $file_size -lt 104857600 ]]; then
+                log_warning "File size is small (${file_size} bytes). This might not be a complete image."
+            fi
+            
+            # Move file (use sudo only if directory is not user-writable)
+            if is_user_writable "$dest_dir"; then
+                mv "$temp_file" "$dest_file"
+                chmod 644 "$dest_file"
+            else
+                sudo mv "$temp_file" "$dest_file"
+                sudo chown root:root "$dest_file"
+                sudo chmod 644 "$dest_file"
+            fi
+            log_success "Image downloaded to ${dest_file}"
+        else
+            log_error "Downloaded file is not a valid QCOW2 image"
+            rm -f "$temp_file"
+            exit 1
+        fi
+    else
+        log_error "Failed to download image"
+        rm -f "$temp_file"
+        exit 1
+    fi
+}
+
 # Download Fedora cloud image
-download_image() {
+download_fedora_image() {
     local version="$1"
     local dest_dir="$2"
     local dest_file="${dest_dir}/fedora-cloud-base-${version}.qcow2"
@@ -168,7 +365,7 @@ download_image() {
     
     # Find the correct image name
     local image_name
-    if ! image_name=$(find_image_name "$version"); then
+    if ! image_name=$(find_fedora_image_name "$version"); then
         log_error "Could not find Fedora ${version} cloud image"
         log_info "This version may be too old or no longer available."
         log_info "Try a different version with: $0 --version 42"
@@ -190,8 +387,16 @@ download_image() {
     log_info "Found image: ${image_name}"
     log_info "Downloading from: ${download_url}"
     
-    # Create directory if needed
-    sudo mkdir -p "$dest_dir"
+    # Expand and resolve directory path
+    dest_dir=$(eval echo "$dest_dir")
+    dest_dir=$(cd "$(dirname "$dest_dir")" 2>/dev/null && pwd)/$(basename "$dest_dir") 2>/dev/null || echo "$dest_dir"
+    
+    # Create directory if needed (use sudo only if not user-writable)
+    if is_user_writable "$dest_dir"; then
+        mkdir -p "$dest_dir"
+    else
+        sudo mkdir -p "$dest_dir"
+    fi
     
     # Download to temp location first
     local temp_file="/tmp/fedora-cloud-download-${version}.qcow2"
@@ -241,9 +446,15 @@ download_image() {
                 log_warning "File size is small (${file_size} bytes). This might not be a complete image."
             fi
             
-            sudo mv "$temp_file" "$dest_file"
-            sudo chown root:root "$dest_file"
-            sudo chmod 644 "$dest_file"
+            # Move file (use sudo only if directory is not user-writable)
+            if is_user_writable "$dest_dir"; then
+                mv "$temp_file" "$dest_file"
+                chmod 644 "$dest_file"
+            else
+                sudo mv "$temp_file" "$dest_file"
+                sudo chown root:root "$dest_file"
+                sudo chmod 644 "$dest_file"
+            fi
             log_success "Image downloaded to ${dest_file}"
         else
             log_error "Downloaded file is not a valid QCOW2 image"
@@ -282,27 +493,36 @@ verify_image() {
 
 # Main
 main() {
-    log_info "=== Fedora Cloud Image Setup ==="
+    log_info "=== Cloud Image Setup ==="
     
     check_requirements
     
     # Parse command line args
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --version|-v)
-                FEDORA_VERSION="$2"
+            --distro|-d)
+                DISTRO="$2"
                 shift 2
                 ;;
-            --dir|-d)
+            --version|-v)
+                VERSION="$2"
+                shift 2
+                ;;
+            --dir)
                 IMAGE_DIR="$2"
                 shift 2
                 ;;
             --help|-h)
-                echo "Usage: $0 [--version VERSION] [--dir DIRECTORY]"
+                echo "Usage: $0 [--distro DISTRO] [--version VERSION] [--dir DIRECTORY]"
                 echo ""
                 echo "Options:"
-                echo "  --version, -v    Fedora version (default: 42)"
-                echo "  --dir, -d        Image directory (default: /var/lib/libvirt/images)"
+                echo "  --distro, -d     Distribution: fedora or debian (default: fedora)"
+                echo "  --version, -v    Version number (default: 42 for fedora, 12 for debian)"
+                echo "  --dir            Image directory (default: /var/lib/libvirt/images)"
+                echo ""
+                echo "Examples:"
+                echo "  $0 --distro fedora --version 42"
+                echo "  $0 --distro debian --version 12"
                 exit 0
                 ;;
             *)
@@ -312,13 +532,32 @@ main() {
         esac
     done
     
-    download_image "$FEDORA_VERSION" "$IMAGE_DIR"
-    verify_image "${IMAGE_DIR}/fedora-cloud-base-${FEDORA_VERSION}.qcow2"
+    # Normalize distro name
+    DISTRO=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
     
-    log_success "Base image setup complete!"
-    echo ""
-    echo "Base image location: ${IMAGE_DIR}/fedora-cloud-base-${FEDORA_VERSION}.qcow2"
-    echo "You can now run: ./scripts/create-vms.sh --versions ${FEDORA_VERSION}"
+    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" ]]; then
+        log_error "Unsupported distribution: $DISTRO"
+        log_info "Supported distributions: fedora, debian"
+        exit 1
+    fi
+    
+    log_info "Distribution: ${DISTRO}"
+    log_info "Version: ${VERSION}"
+    
+    # Download image based on distribution
+    if [[ "$DISTRO" == "fedora" ]]; then
+        download_fedora_image "$VERSION" "$IMAGE_DIR"
+        verify_image "${IMAGE_DIR}/fedora-cloud-base-${VERSION}.qcow2"
+        log_success "Base image setup complete!"
+        echo ""
+        echo "Base image location: ${IMAGE_DIR}/fedora-cloud-base-${VERSION}.qcow2"
+    elif [[ "$DISTRO" == "debian" ]]; then
+        download_debian_image "$VERSION" "$IMAGE_DIR"
+        verify_image "${IMAGE_DIR}/debian-cloud-base-${VERSION}.qcow2"
+        log_success "Base image setup complete!"
+        echo ""
+        echo "Base image location: ${IMAGE_DIR}/debian-cloud-base-${VERSION}.qcow2"
+    fi
 }
 
 main "$@"

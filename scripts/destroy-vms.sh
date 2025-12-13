@@ -11,6 +11,16 @@ VM_PREFIX="${VM_PREFIX:-snail-test}"
 IMAGE_DIR="${IMAGE_DIR:-/var/lib/libvirt/images}"
 CLOUDINIT_DIR="${CLOUDINIT_DIR:-/tmp/snail-test-cloudinit}"
 
+# Expand relative paths relative to testing directory
+if [[ "$IMAGE_DIR" != /* ]]; then
+    IMAGE_DIR="${TESTING_DIR}/${IMAGE_DIR}"
+fi
+if [[ "$CLOUDINIT_DIR" != /* ]]; then
+    CLOUDINIT_DIR="${TESTING_DIR}/${CLOUDINIT_DIR}"
+fi
+IMAGE_DIR=$(eval echo "$IMAGE_DIR")
+CLOUDINIT_DIR=$(eval echo "$CLOUDINIT_DIR")
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -48,10 +58,17 @@ destroy_vm() {
     log_info "  Removing VM definition and storage..."
     sudo virsh undefine "$vm_name" --remove-all-storage 2>/dev/null || true
     
-    # Clean up any remaining disk images
-    local disk_path="${IMAGE_DIR}/${vm_name}.qcow2"
+    # Clean up any remaining disk images (use sudo only if directory is not user-writable)
+    local resolved_image_dir
+    resolved_image_dir=$(eval echo "$IMAGE_DIR")
+    resolved_image_dir=$(cd "$(dirname "$resolved_image_dir")" 2>/dev/null && pwd)/$(basename "$resolved_image_dir") 2>/dev/null || echo "$resolved_image_dir"
+    local disk_path="${resolved_image_dir}/${vm_name}.qcow2"
     if [[ -f "$disk_path" ]]; then
-        sudo rm -f "$disk_path"
+        if is_user_writable "$resolved_image_dir"; then
+            rm -f "$disk_path"
+        else
+            sudo rm -f "$disk_path"
+        fi
     fi
     
     log_success "  VM ${vm_name} destroyed"
