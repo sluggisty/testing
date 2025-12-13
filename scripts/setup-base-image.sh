@@ -163,6 +163,55 @@ find_ubuntu_image_name() {
     return 1
 }
 
+# Find the correct CentOS image name
+find_centos_image_name() {
+    local version="$1"
+    
+    # CentOS cloud images are at:
+    # https://cloud.centos.org/centos/{version}-stream/x86_64/images/ (for Stream 9, 8)
+    # https://cloud.centos.org/centos/{version}/x86_64/images/ (for CentOS 7)
+    local base_url
+    if [[ "$version" == "9" || "$version" == "8" ]]; then
+        base_url="https://cloud.centos.org/centos/${version}-stream/x86_64/images/"
+    else
+        # CentOS 7 and older
+        base_url="https://cloud.centos.org/centos/${version}/x86_64/images/"
+    fi
+    
+    # CentOS Stream images are named like: CentOS-Stream-GenericCloud-9-20250101.0.x86_64.qcow2
+    # CentOS 7 images are named like: CentOS-7-x86_64-GenericCloud-*.qcow2
+    local image_name
+    
+    if [[ "$version" == "9" || "$version" == "8" ]]; then
+        # For Stream versions, look for CentOS-Stream-GenericCloud-{version}-*.qcow2
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-Stream-GenericCloud-'${version}'-[0-9]+[^"]*\.x86_64\.qcow2' | head -1 || true)
+    else
+        # For CentOS 7, look for CentOS-7-x86_64-GenericCloud-*.qcow2
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-'${version}'-x86_64-GenericCloud[^"]*\.qcow2' | head -1 || true)
+    fi
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        echo "$base_url" > /tmp/centos_base_url_${version}
+        return 0
+    fi
+    
+    # Fallback: try more generic patterns
+    if [[ "$version" == "9" || "$version" == "8" ]]; then
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-Stream[^"]*GenericCloud[^"]*\.qcow2' | grep -v "\.MD5SUM\|\.SHA" | head -1 || true)
+    else
+        image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-'${version}'[^"]*GenericCloud[^"]*\.qcow2' | grep -v "\.MD5SUM\|\.SHA" | head -1 || true)
+    fi
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        echo "$base_url" > /tmp/centos_base_url_${version}
+        return 0
+    fi
+    
+    return 1
+}
+
 # Find the correct image name from Fedora's directory listing
 find_fedora_image_name() {
     local version="$1"
@@ -473,6 +522,106 @@ download_ubuntu_image() {
     fi
 }
 
+# Download CentOS cloud image
+download_centos_image() {
+    local version="$1"
+    local dest_dir="$2"
+    local dest_file="${dest_dir}/centos-cloud-base-${version}.qcow2"
+    
+    if [[ -f "$dest_file" ]]; then
+        log_warning "Base image already exists at ${dest_file}"
+        read -p "Do you want to re-download? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Using existing image"
+            return 0
+        fi
+    fi
+    
+    log_info "Finding CentOS ${version} cloud image..."
+    
+    # Find the correct image name
+    local image_name
+    if ! image_name=$(find_centos_image_name "$version"); then
+        log_error "Could not find CentOS ${version} cloud image"
+        log_info "This version may be too old or no longer available."
+        log_info "Try a different version with: $0 --distro centos --version 9"
+        log_info "Or check: https://cloud.centos.org/"
+        exit 1
+    fi
+    
+    # Get base URL from temp file (set by find_centos_image_name)
+    local base_url
+    if [[ -f "/tmp/centos_base_url_${version}" ]]; then
+        base_url=$(cat "/tmp/centos_base_url_${version}")
+        rm -f "/tmp/centos_base_url_${version}"
+    else
+        # Fallback: construct URL from version
+        if [[ "$version" == "9" || "$version" == "8" ]]; then
+            base_url="https://cloud.centos.org/centos/${version}-stream/x86_64/images/"
+        else
+            base_url="https://cloud.centos.org/centos/${version}/x86_64/images/"
+        fi
+    fi
+    
+    local download_url="${base_url}${image_name}"
+    
+    log_info "Found image: ${image_name}"
+    log_info "Downloading from: ${download_url}"
+    
+    # Create directory if needed
+    sudo mkdir -p "$dest_dir"
+    
+    # Download to temp location first
+    local temp_file="/tmp/centos-cloud-download-${version}.qcow2"
+    
+    # Use curl with better progress and redirect following
+    if curl -L --progress-bar -f -o "$temp_file" "$download_url" 2>&1; then
+        # Verify it's a valid qcow2 image
+        local file_size
+        file_size=$(stat -f%z "$temp_file" 2>/dev/null || stat -c%s "$temp_file" 2>/dev/null || echo "0")
+        
+        # Check if it's HTML (error page)
+        if head -c 100 "$temp_file" | grep -q "<html\|<!DOCTYPE\|404\|Not Found\|Error"; then
+            log_error "Downloaded file appears to be an HTML error page"
+            log_info "The image may not be available for CentOS ${version}"
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        # Check QCOW2 magic bytes
+        local magic_bytes
+        magic_bytes=$(head -c 4 "$temp_file" | od -An -tx1 | tr -d ' \n' || echo "")
+        local is_qcow2=false
+        if [[ "$magic_bytes" == "514649fb" ]]; then
+            is_qcow2=true
+        fi
+        
+        if [[ "$is_qcow2" == "true" ]]; then
+            if [[ $file_size -lt 104857600 ]]; then
+                log_warning "File size is small (${file_size} bytes). This might not be a complete image."
+            fi
+            
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
+            log_success "Image downloaded to ${dest_file}"
+        else
+            log_error "Downloaded file is not a valid QCOW2 image"
+            log_info "Magic bytes: ${magic_bytes} (expected: 514649fb)"
+            log_info "File type: $(file "$temp_file" || echo 'unknown')"
+            log_info "The file might be an error page or corrupted download."
+            rm -f "$temp_file"
+            exit 1
+        fi
+    else
+        log_error "Failed to download image"
+        log_info "URL might be incorrect or the file is no longer available"
+        rm -f "$temp_file"
+        exit 1
+    fi
+}
+
 # Download Fedora cloud image
 download_fedora_image() {
     local version="$1"
@@ -630,7 +779,7 @@ main() {
                 echo "Usage: $0 [--distro DISTRO] [--version VERSION] [--dir DIRECTORY]"
                 echo ""
                 echo "Options:"
-                echo "  --distro, -d     Distribution: fedora, debian, or ubuntu (default: fedora)"
+                echo "  --distro, -d     Distribution: fedora, debian, ubuntu, or centos (default: fedora)"
                 echo "  --version, -v    Version number (default: 42 for fedora, 12 for debian)"
                 echo "  --dir            Image directory (default: /var/lib/libvirt/images)"
                 echo ""
@@ -638,6 +787,7 @@ main() {
                 echo "  $0 --distro fedora --version 42"
                 echo "  $0 --distro debian --version 12"
                 echo "  $0 --distro ubuntu --version 24.04"
+                echo "  $0 --distro centos --version 9"
                 exit 0
                 ;;
             *)
@@ -650,9 +800,9 @@ main() {
     # Normalize distro name
     DISTRO=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
     
-    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" ]]; then
+    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" && "$DISTRO" != "centos" ]]; then
         log_error "Unsupported distribution: $DISTRO"
-        log_info "Supported distributions: fedora, debian, ubuntu"
+        log_info "Supported distributions: fedora, debian, ubuntu, centos"
         exit 1
     fi
     
@@ -677,6 +827,11 @@ main() {
         verify_image "${IMAGE_DIR}/ubuntu-cloud-base-${version_key}.qcow2"
         log_success "Ubuntu base image setup complete!"
         echo "Base image location: ${IMAGE_DIR}/ubuntu-cloud-base-${version_key}.qcow2"
+    elif [[ "$DISTRO" == "centos" ]]; then
+        download_centos_image "$VERSION" "$IMAGE_DIR"
+        verify_image "${IMAGE_DIR}/centos-cloud-base-${VERSION}.qcow2"
+        log_success "CentOS base image setup complete!"
+        echo "Base image location: ${IMAGE_DIR}/centos-cloud-base-${VERSION}.qcow2"
     else
         log_error "Unsupported distribution: $DISTRO"
         exit 1

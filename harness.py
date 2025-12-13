@@ -280,6 +280,8 @@ def create(distro: str, versions: str, specs: str, count: int, memory: int, cpus
         elif spec_distro == "ubuntu":
             version_key = spec_version.replace(".", "_")
             base_image = Path(image_dir) / f"ubuntu-cloud-base-{version_key}.qcow2"
+        elif spec_distro == "centos":
+            base_image = Path(image_dir) / f"centos-cloud-base-{spec_version}.qcow2"
         else:
             console.print(f"[red]Unknown distribution: {spec_distro}[/]")
             sys.exit(1)
@@ -796,12 +798,36 @@ def list_versions():
         console.print(table)
         console.print()
     
+    # Show CentOS versions
+    if "centos" in distributions:
+        centos_versions = distributions["centos"].get("available_versions", {})
+        table = Table(title="Available CentOS Versions")
+        table.add_column("Version", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Base Image", justify="center")
+        
+        # Sort CentOS versions (they're like "9", "8", "7")
+        def centos_sort_key(item):
+            version = item[0]
+            if isinstance(version, str) and version.isdigit():
+                return int(version)
+            return 0
+        
+        for version, name in sorted(centos_versions.items(), key=centos_sort_key, reverse=True):
+            base_image = Path(image_dir) / f"centos-cloud-base-{version}.qcow2"
+            status = "[green]✓[/]" if base_image.exists() else "[red]✗[/]"
+            table.add_row(str(version), name, status)
+        
+        console.print(table)
+        console.print()
+    
     console.print("[dim]Use --specs option when creating VMs to select specific versions[/]")
     console.print("[dim]Examples:[/]")
     console.print("[dim]  ./harness.py create --specs fedora:42,41[/]")
     console.print("[dim]  ./harness.py create --specs debian:12,11[/]")
     console.print("[dim]  ./harness.py create --specs ubuntu:24.04,22.04[/]")
-    console.print("[dim]  ./harness.py create --specs fedora:42,debian:12,ubuntu:24.04[/]")
+    console.print("[dim]  ./harness.py create --specs centos:9,8[/]")
+    console.print("[dim]  ./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9[/]")
 
 
 @cli.group()
