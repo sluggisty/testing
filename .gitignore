@@ -23,9 +23,3 @@ ansible/inventory_cache/
 # Keep logs directory
 !logs/.gitkeep
 
-# VM images and cloud-init data (user-writable directories)
-images/
-cloudinit/
-*.qcow2
-*.iso
-

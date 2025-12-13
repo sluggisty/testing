@@ -90,17 +90,14 @@ snail_core:
 
 # Host Settings
 host:
-  # Path to store VM images (user-writable directory)
-  # Images will be stored in: <testing_dir>/images/
-  image_dir: "./images"
+  # Path to store VM images
+  image_dir: "/var/lib/libvirt/images"
   
-  # Path to store cloud-init ISOs (user-writable directory)
-  # Cloud-init ISOs will be stored in: <testing_dir>/cloudinit/
-  cloudinit_dir: "./cloudinit"
+  # Path to store cloud-init ISOs
+  cloudinit_dir: "/tmp/snail-test-cloudinit"
   
   # Path to base Fedora cloud image (will be downloaded if not exists)
-  # This is now relative to image_dir above
-  base_image_path: "./images/fedora-cloud-base.qcow2"
+  base_image_path: "/var/lib/libvirt/images/fedora-cloud-base.qcow2"
 
 # Paths (relative to testing directory)
 paths:
