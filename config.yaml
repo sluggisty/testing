@@ -52,6 +52,17 @@ vms:
         "10": "Debian 10 (Buster)"
         "9": "Debian 9 (Stretch)"
       default_version: "12"
+    
+    ubuntu:
+      # Available Ubuntu versions to test
+      # Format: version: display_name
+      # Ubuntu uses version numbers (24.04, 22.04, etc.) but images are accessed by codename
+      available_versions:
+        "24.04": "Ubuntu 24.04 LTS (Noble Numbat)"
+        "22.04": "Ubuntu 22.04 LTS (Jammy Jellyfish)"
+        "20.04": "Ubuntu 20.04 LTS (Focal Fossa)"
+        "18.04": "Ubuntu 18.04 LTS (Bionic Beaver)"
+      default_version: "24.04"
   
   # User credentials for VMs
   username: "snail"

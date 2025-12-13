@@ -277,6 +277,9 @@ def create(distro: str, versions: str, specs: str, count: int, memory: int, cpus
             base_image = Path(image_dir) / f"fedora-cloud-base-{spec_version}.qcow2"
         elif spec_distro == "debian":
             base_image = Path(image_dir) / f"debian-cloud-base-{spec_version}.qcow2"
+        elif spec_distro == "ubuntu":
+            version_key = spec_version.replace(".", "_")
+            base_image = Path(image_dir) / f"ubuntu-cloud-base-{version_key}.qcow2"
         else:
             console.print(f"[red]Unknown distribution: {spec_distro}[/]")
             sys.exit(1)
@@ -767,11 +770,38 @@ def list_versions():
         console.print(table)
         console.print()
     
+    # Show Ubuntu versions
+    if "ubuntu" in distributions:
+        ubuntu_versions = distributions["ubuntu"].get("available_versions", {})
+        table = Table(title="Available Ubuntu Versions")
+        table.add_column("Version", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Base Image", justify="center")
+        
+        # Sort Ubuntu versions (they're like "24.04", "22.04", etc.)
+        def ubuntu_sort_key(item):
+            version = item[0]
+            if isinstance(version, str) and "." in version:
+                parts = version.split(".")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    return int(parts[0]) * 100 + int(parts[1])
+            return 0
+        
+        for version, name in sorted(ubuntu_versions.items(), key=ubuntu_sort_key, reverse=True):
+            version_key = version.replace(".", "_")
+            base_image = Path(image_dir) / f"ubuntu-cloud-base-{version_key}.qcow2"
+            status = "[green]✓[/]" if base_image.exists() else "[red]✗[/]"
+            table.add_row(str(version), name, status)
+        
+        console.print(table)
+        console.print()
+    
     console.print("[dim]Use --specs option when creating VMs to select specific versions[/]")
     console.print("[dim]Examples:[/]")
     console.print("[dim]  ./harness.py create --specs fedora:42,41[/]")
     console.print("[dim]  ./harness.py create --specs debian:12,11[/]")
-    console.print("[dim]  ./harness.py create --specs fedora:42,debian:12[/]")
+    console.print("[dim]  ./harness.py create --specs ubuntu:24.04,22.04[/]")
+    console.print("[dim]  ./harness.py create --specs fedora:42,debian:12,ubuntu:24.04[/]")
 
 
 @cli.group()
