@@ -285,6 +285,11 @@ def create(distro: str, versions: str, specs: str, count: int, memory: int, cpus
         elif spec_distro == "rhel":
             version_key = spec_version.replace(".", "_")
             base_image = Path(image_dir) / f"rhel-cloud-base-{version_key}.qcow2"
+        elif spec_distro == "suse":
+            version_key = spec_version.replace(".", "_")
+            if spec_version.startswith("sles"):
+                version_key = f"sles_{version_key[4:]}"
+            base_image = Path(image_dir) / f"suse-cloud-base-{version_key}.qcow2"
         else:
             console.print(f"[red]Unknown distribution: {spec_distro}[/]")
             sys.exit(1)
@@ -856,6 +861,45 @@ def list_versions():
         console.print(table)
         console.print()
     
+    # Show SUSE versions
+    if "suse" in distributions:
+        suse_versions = distributions["suse"].get("available_versions", {})
+        table = Table(title="Available SUSE Versions")
+        table.add_column("Version", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Base Image", justify="center")
+        table.add_column("Note", style="yellow")
+        
+        # Sort SUSE versions
+        def suse_sort_key(item):
+            version = item[0]
+            if isinstance(version, str):
+                if version.startswith("sles"):
+                    # SLES: sles15.5 -> 15005, sles15.4 -> 15004
+                    num = version[4:].replace(".", "")
+                    if num.isdigit():
+                        return 20000 + int(num)  # SLES after openSUSE
+                elif version == "tumbleweed":
+                    return 30000  # Tumbleweed last
+                elif "." in version:
+                    # openSUSE Leap: 15.5 -> 1505, 15.4 -> 1504
+                    parts = version.split(".")
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        return int(parts[0]) * 100 + int(parts[1])
+            return 0
+        
+        for version, name in sorted(suse_versions.items(), key=suse_sort_key, reverse=True):
+            version_key = version.replace(".", "_")
+            if version.startswith("sles"):
+                version_key = f"sles_{version_key[4:]}"
+            base_image = Path(image_dir) / f"suse-cloud-base-{version_key}.qcow2"
+            status = "[green]✓[/]" if base_image.exists() else "[red]✗[/]"
+            note = "[yellow]Requires subscription[/]" if version.startswith("sles") and not base_image.exists() else ""
+            table.add_row(str(version), name, status, note)
+        
+        console.print(table)
+        console.print()
+    
     console.print("[dim]Use --specs option when creating VMs to select specific versions[/]")
     console.print("[dim]Examples:[/]")
     console.print("[dim]  ./harness.py create --specs fedora:42,41[/]")
@@ -863,7 +907,8 @@ def list_versions():
     console.print("[dim]  ./harness.py create --specs ubuntu:24.04,22.04[/]")
     console.print("[dim]  ./harness.py create --specs centos:9,8[/]")
     console.print("[dim]  ./harness.py create --specs rhel:9,8[/]")
-    console.print("[dim]  ./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9[/]")
+    console.print("[dim]  ./harness.py create --specs suse:15.5,15.4[/]")
+    console.print("[dim]  ./harness.py create --specs fedora:42,debian:12,ubuntu:24.04,centos:9,rhel:9,suse:15.5[/]")
     console.print("")
     console.print("[yellow]Note: RHEL images may require Red Hat subscription to download[/]")
 
