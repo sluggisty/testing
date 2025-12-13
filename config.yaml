@@ -73,6 +73,25 @@ vms:
         "8": "CentOS Stream 8"
         "7": "CentOS 7 (EOL)"
       default_version: "9"
+    
+    rhel:
+      # Available RHEL versions to test
+      # Format: version: display_name
+      # Supports both major (9, 8, 7) and minor (9.4, 9.3, 8.10, etc.) releases
+      # Note: RHEL cloud images may require Red Hat subscription to download
+      available_versions:
+        "9.4": "RHEL 9.4"
+        "9.3": "RHEL 9.3"
+        "9.2": "RHEL 9.2"
+        "9.1": "RHEL 9.1"
+        "9": "RHEL 9 (latest)"
+        "8.10": "RHEL 8.10"
+        "8.9": "RHEL 8.9"
+        "8.8": "RHEL 8.8"
+        "8": "RHEL 8 (latest)"
+        "7.9": "RHEL 7.9"
+        "7": "RHEL 7 (latest)"
+      default_version: "9.4"
   
   # User credentials for VMs
   username: "snail"

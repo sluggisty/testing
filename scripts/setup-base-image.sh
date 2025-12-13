@@ -163,6 +163,132 @@ find_ubuntu_image_name() {
     return 1
 }
 
+# Find the correct RHEL image name
+find_rhel_image_name() {
+    local version="$1"
+    
+    # RHEL cloud images are typically at:
+    # https://access.redhat.com/downloads/content/rhel (requires subscription)
+    # Or from cloud.redhat.com
+    # For public access, try: https://cdn.redhat.com/content/dist/rhel8/8/x86_64/baseos/images/
+    # Note: RHEL images typically require Red Hat subscription
+    
+    # Extract major version (9.4 -> 9, 8.10 -> 8)
+    local major_version="${version%%.*}"
+    local minor_version="${version#*.}"
+    
+    # If version doesn't contain a dot, it's just a major version
+    if [[ "$version" == "$major_version" ]]; then
+        minor_version=""
+    fi
+    
+    local base_url
+    # Construct URL based on major version
+    # For minor releases, URL structure may vary
+    case "$major_version" in
+        "9")
+            if [[ -n "$minor_version" ]]; then
+                # Minor release: https://cdn.redhat.com/content/dist/rhel9/9.4/x86_64/baseos/images/
+                base_url="https://cdn.redhat.com/content/dist/rhel9/${version}/x86_64/baseos/images/"
+            else
+                # Latest major: https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/images/
+                base_url="https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/images/"
+            fi
+            ;;
+        "8")
+            if [[ -n "$minor_version" ]]; then
+                # Minor release: https://cdn.redhat.com/content/dist/rhel8/8.10/x86_64/baseos/images/
+                base_url="https://cdn.redhat.com/content/dist/rhel8/${version}/x86_64/baseos/images/"
+            else
+                # Latest major: https://cdn.redhat.com/content/dist/rhel8/8/x86_64/baseos/images/
+                base_url="https://cdn.redhat.com/content/dist/rhel8/8/x86_64/baseos/images/"
+            fi
+            ;;
+        "7")
+            if [[ -n "$minor_version" ]]; then
+                # Minor release: https://cdn.redhat.com/content/dist/rhel7/7.9/x86_64/images/
+                base_url="https://cdn.redhat.com/content/dist/rhel7/${version}/x86_64/images/"
+            else
+                # Latest major: https://cdn.redhat.com/content/dist/rhel7/7/x86_64/images/
+                base_url="https://cdn.redhat.com/content/dist/rhel7/7/x86_64/images/"
+            fi
+            ;;
+        *)
+            log_error "Unsupported RHEL major version: $major_version"
+            return 1
+            ;;
+    esac
+    
+    # RHEL images are typically named like: rhel-{version}-x86_64-kvm.qcow2
+    # or rhel-{version}-x86_64-cloud.qcow2
+    # For minor releases: rhel-9.4-x86_64-kvm.qcow2
+    local image_name
+    
+    # Try to find KVM/cloud image matching the exact version
+    # Escape dots in version for regex
+    local version_escaped="${version//./\\.}"
+    
+    # Try to access the URL (may require authentication)
+    local curl_output
+    curl_output=$(curl -sL -w "\n%{http_code}" "$base_url" 2>/dev/null || echo "000")
+    local http_code
+    http_code=$(echo "$curl_output" | tail -1)
+    local page_content
+    page_content=$(echo "$curl_output" | head -n -1)
+    
+    # Check if we got a valid response (200) or if it requires authentication (401, 403)
+    if [[ "$http_code" == "200" ]]; then
+        image_name=$(echo "$page_content" | grep -oE 'rhel-'${version_escaped}'[^"]*x86_64[^"]*\.qcow2' | grep -v "\.MD5SUM\|\.SHA" | head -1 || true)
+        
+        if [[ -n "$image_name" ]]; then
+            echo "$image_name"
+            local version_key="${version//./_}"
+            echo "$base_url" > /tmp/rhel_base_url_${version_key}
+            return 0
+        fi
+        
+        # Fallback: try alternative naming patterns
+        for pattern in \
+            "rhel-${version}-x86_64-kvm.qcow2" \
+            "rhel-${version}-x86_64-cloud.qcow2" \
+            "rhel-${version}-x86_64-qcow2.qcow2" \
+            "rhel-${major_version}-x86_64-kvm.qcow2" \
+            "rhel-${major_version}-x86_64-cloud.qcow2"; do
+            
+            local found_name
+            found_name=$(echo "$page_content" | grep -oE "$(echo "$pattern" | sed 's/\./\\./g')" | head -1 || true)
+            if [[ -n "$found_name" ]]; then
+                echo "$found_name"
+                local version_key="${version//./_}"
+                echo "$base_url" > /tmp/rhel_base_url_${version_key}
+                return 0
+            fi
+        done
+    elif [[ "$http_code" == "401" || "$http_code" == "403" ]]; then
+        log_warning "RHEL image repository requires authentication (HTTP $http_code)"
+        log_info "RHEL images require Red Hat subscription to download"
+    elif [[ "$http_code" == "404" ]]; then
+        log_warning "RHEL image not found at URL (HTTP 404)"
+        log_info "The URL structure may have changed or the version may not be available"
+    else
+        log_warning "Could not access RHEL image repository (HTTP $http_code or network error)"
+    fi
+    
+    # RHEL images require subscription - provide helpful instructions
+    log_info ""
+    log_info "RHEL images are not publicly available and require Red Hat subscription."
+    log_info "To download RHEL images:"
+    log_info "  1. Log in to: https://access.redhat.com/downloads/content/rhel"
+    log_info "  2. Navigate to: Red Hat Enterprise Linux > ${version} > Cloud Images"
+    log_info "  3. Download the QCOW2 image (KVM/GenericCloud variant)"
+    log_info "  4. Place it at: /var/lib/libvirt/images/rhel-cloud-base-${version//./_}.qcow2"
+    log_info ""
+    log_info "Alternatively, you can use CentOS Stream (similar to RHEL) which is free:"
+    log_info "  $0 --distro centos --version 9"
+    
+    return 1
+}
+
 # Find the correct CentOS image name
 find_centos_image_name() {
     local version="$1"
@@ -522,6 +648,144 @@ download_ubuntu_image() {
     fi
 }
 
+# Download RHEL cloud image
+download_rhel_image() {
+    local version="$1"
+    local dest_dir="$2"
+    # Convert version dots to underscores for filename (9.4 -> 9_4)
+    local version_key="${version//./_}"
+    local dest_file="${dest_dir}/rhel-cloud-base-${version_key}.qcow2"
+    
+    # Check if image already exists (user may have downloaded manually)
+    if [[ -f "$dest_file" ]]; then
+        log_success "RHEL image already exists at ${dest_file}"
+        log_info "Using existing image. If you want to re-download, delete the file first."
+        return 0
+    fi
+    
+    log_info "Finding RHEL ${version} cloud image..."
+    log_warning "Note: RHEL images require Red Hat subscription to download"
+    
+    # Extract major version for alternative suggestion
+    local major_version="${version%%.*}"
+    
+    # Find the correct image name
+    local image_name
+    if ! image_name=$(find_rhel_image_name "$version"); then
+        log_error "Could not download RHEL ${version} cloud image automatically"
+        log_info ""
+        log_info "RHEL images require Red Hat subscription and cannot be downloaded automatically."
+        log_info ""
+        log_info "To use RHEL images:"
+        log_info "  1. Download manually from: https://access.redhat.com/downloads/content/rhel"
+        log_info "     (Requires Red Hat account with active subscription)"
+        log_info "  2. Look for: Red Hat Enterprise Linux > ${version} > Cloud Images > QCOW2"
+        log_info "  3. Download the KVM/GenericCloud variant"
+        log_info "  4. Place it at: ${dest_file}"
+        log_info ""
+        log_info "After placing the image, you can create VMs with:"
+        log_info "  ./harness.py create --specs rhel:${version}"
+        log_info ""
+        log_info "Alternative: Use CentOS Stream (similar to RHEL, free):"
+        log_info "  $0 --distro centos --version ${major_version}"
+        exit 1
+    fi
+    
+    # Get base URL from temp file (set by find_rhel_image_name)
+    local base_url
+    if [[ -f "/tmp/rhel_base_url_${version_key}" ]]; then
+        base_url=$(cat "/tmp/rhel_base_url_${version_key}")
+        rm -f "/tmp/rhel_base_url_${version_key}"
+    else
+        # Fallback: construct URL from version
+        local major_version="${version%%.*}"
+        case "$major_version" in
+            "9")
+                if [[ "$version" == *"."* ]]; then
+                    base_url="https://cdn.redhat.com/content/dist/rhel9/${version}/x86_64/baseos/images/"
+                else
+                    base_url="https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/images/"
+                fi
+                ;;
+            "8")
+                if [[ "$version" == *"."* ]]; then
+                    base_url="https://cdn.redhat.com/content/dist/rhel8/${version}/x86_64/baseos/images/"
+                else
+                    base_url="https://cdn.redhat.com/content/dist/rhel8/8/x86_64/baseos/images/"
+                fi
+                ;;
+            "7")
+                if [[ "$version" == *"."* ]]; then
+                    base_url="https://cdn.redhat.com/content/dist/rhel7/${version}/x86_64/images/"
+                else
+                    base_url="https://cdn.redhat.com/content/dist/rhel7/7/x86_64/images/"
+                fi
+                ;;
+        esac
+    fi
+    
+    local download_url="${base_url}${image_name}"
+    
+    log_info "Found image: ${image_name}"
+    log_info "Downloading from: ${download_url}"
+    
+    # Create directory if needed
+    sudo mkdir -p "$dest_dir"
+    
+    # Download to temp location first
+    local temp_file="/tmp/rhel-cloud-download-${version}.qcow2"
+    
+    # Use curl with better progress and redirect following
+    if curl -L --progress-bar -f -o "$temp_file" "$download_url" 2>&1; then
+        # Verify it's a valid qcow2 image
+        local file_size
+        file_size=$(stat -f%z "$temp_file" 2>/dev/null || stat -c%s "$temp_file" 2>/dev/null || echo "0")
+        
+        # Check if it's HTML (error page or login page)
+        if head -c 100 "$temp_file" | grep -q "<html\|<!DOCTYPE\|404\|Not Found\|Error\|login\|Login\|Red Hat"; then
+            log_error "Downloaded file appears to be an HTML page (may require authentication)"
+            log_info "RHEL images require Red Hat subscription. You may need to download manually."
+            log_info "Download from: https://access.redhat.com/downloads/content/rhel"
+            log_info "Then place at: ${dest_file}"
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        # Check QCOW2 magic bytes
+        local magic_bytes
+        magic_bytes=$(head -c 4 "$temp_file" | od -An -tx1 | tr -d ' \n' || echo "")
+        local is_qcow2=false
+        if [[ "$magic_bytes" == "514649fb" ]]; then
+            is_qcow2=true
+        fi
+        
+        if [[ "$is_qcow2" == "true" ]]; then
+            if [[ $file_size -lt 104857600 ]]; then
+                log_warning "File size is small (${file_size} bytes). This might not be a complete image."
+            fi
+            
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
+            log_success "Image downloaded to ${dest_file}"
+        else
+            log_error "Downloaded file is not a valid QCOW2 image"
+            log_info "Magic bytes: ${magic_bytes} (expected: 514649fb)"
+            log_info "File type: $(file "$temp_file" || echo 'unknown')"
+            log_info "The file might be an error page or require authentication."
+            rm -f "$temp_file"
+            exit 1
+        fi
+    else
+        log_error "Failed to download image"
+        log_info "RHEL images may require Red Hat subscription authentication."
+        log_info "You may need to download manually from: https://access.redhat.com/downloads/content/rhel"
+        log_info "Then place the image at: ${dest_file}"
+        rm -f "$temp_file"
+        exit 1
+    fi
+}
+
 # Download CentOS cloud image
 download_centos_image() {
     local version="$1"
@@ -779,7 +1043,7 @@ main() {
                 echo "Usage: $0 [--distro DISTRO] [--version VERSION] [--dir DIRECTORY]"
                 echo ""
                 echo "Options:"
-                echo "  --distro, -d     Distribution: fedora, debian, ubuntu, or centos (default: fedora)"
+                echo "  --distro, -d     Distribution: fedora, debian, ubuntu, centos, or rhel (default: fedora)"
                 echo "  --version, -v    Version number (default: 42 for fedora, 12 for debian)"
                 echo "  --dir            Image directory (default: /var/lib/libvirt/images)"
                 echo ""
@@ -788,6 +1052,7 @@ main() {
                 echo "  $0 --distro debian --version 12"
                 echo "  $0 --distro ubuntu --version 24.04"
                 echo "  $0 --distro centos --version 9"
+                echo "  $0 --distro rhel --version 9"
                 exit 0
                 ;;
             *)
@@ -800,9 +1065,9 @@ main() {
     # Normalize distro name
     DISTRO=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
     
-    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" && "$DISTRO" != "centos" ]]; then
+    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" && "$DISTRO" != "centos" && "$DISTRO" != "rhel" ]]; then
         log_error "Unsupported distribution: $DISTRO"
-        log_info "Supported distributions: fedora, debian, ubuntu, centos"
+        log_info "Supported distributions: fedora, debian, ubuntu, centos, rhel"
         exit 1
     fi
     
@@ -832,6 +1097,12 @@ main() {
         verify_image "${IMAGE_DIR}/centos-cloud-base-${VERSION}.qcow2"
         log_success "CentOS base image setup complete!"
         echo "Base image location: ${IMAGE_DIR}/centos-cloud-base-${VERSION}.qcow2"
+    elif [[ "$DISTRO" == "rhel" ]]; then
+        download_rhel_image "$VERSION" "$IMAGE_DIR"
+        local version_key="${VERSION//./_}"
+        verify_image "${IMAGE_DIR}/rhel-cloud-base-${version_key}.qcow2"
+        log_success "RHEL base image setup complete!"
+        echo "Base image location: ${IMAGE_DIR}/rhel-cloud-base-${version_key}.qcow2"
     else
         log_error "Unsupported distribution: $DISTRO"
         exit 1
