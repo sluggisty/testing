@@ -15,12 +15,6 @@ DISTRO="${DISTRO:-fedora}"
 VERSION="${VERSION:-42}"
 IMAGE_DIR="${IMAGE_DIR:-/var/lib/libvirt/images}"
 
-# Expand relative paths relative to testing directory
-if [[ "$IMAGE_DIR" != /* ]]; then
-    IMAGE_DIR="${TESTING_DIR}/${IMAGE_DIR}"
-fi
-IMAGE_DIR=$(eval echo "$IMAGE_DIR")
-
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -42,21 +36,6 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Check if directory is user-writable (doesn't need sudo)
-is_user_writable() {
-    local dir="$1"
-    # Expand ~ and resolve relative paths
-    dir=$(eval echo "$dir")
-    dir=$(cd "$(dirname "$dir")" 2>/dev/null && pwd)/$(basename "$dir")
-    
-    # Check if we can write to the directory (or its parent if it doesn't exist)
-    local test_dir="$dir"
-    [[ ! -d "$test_dir" ]] && test_dir="$(dirname "$test_dir")"
-    
-    [[ -w "$test_dir" ]] 2>/dev/null && return 0
-    return 1
 }
 
 # Check for required tools
@@ -270,16 +249,8 @@ download_debian_image() {
     log_info "Found image: ${image_name}"
     log_info "Downloading from: ${download_url}"
     
-    # Expand and resolve directory path
-    dest_dir=$(eval echo "$dest_dir")
-    dest_dir=$(cd "$(dirname "$dest_dir")" 2>/dev/null && pwd)/$(basename "$dest_dir") 2>/dev/null || echo "$dest_dir"
-    
-    # Create directory if needed (use sudo only if not user-writable)
-    if is_user_writable "$dest_dir"; then
-        mkdir -p "$dest_dir"
-    else
-        sudo mkdir -p "$dest_dir"
-    fi
+    # Create directory if needed
+    sudo mkdir -p "$dest_dir"
     
     # Download to temp location first
     local temp_file="/tmp/debian-cloud-download-${version}.qcow2"
@@ -323,15 +294,9 @@ download_debian_image() {
                 log_warning "File size is small (${file_size} bytes). This might not be a complete image."
             fi
             
-            # Move file (use sudo only if directory is not user-writable)
-            if is_user_writable "$dest_dir"; then
-                mv "$temp_file" "$dest_file"
-                chmod 644 "$dest_file"
-            else
-                sudo mv "$temp_file" "$dest_file"
-                sudo chown root:root "$dest_file"
-                sudo chmod 644 "$dest_file"
-            fi
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
             log_success "Image downloaded to ${dest_file}"
         else
             log_error "Downloaded file is not a valid QCOW2 image"
@@ -387,16 +352,8 @@ download_fedora_image() {
     log_info "Found image: ${image_name}"
     log_info "Downloading from: ${download_url}"
     
-    # Expand and resolve directory path
-    dest_dir=$(eval echo "$dest_dir")
-    dest_dir=$(cd "$(dirname "$dest_dir")" 2>/dev/null && pwd)/$(basename "$dest_dir") 2>/dev/null || echo "$dest_dir"
-    
-    # Create directory if needed (use sudo only if not user-writable)
-    if is_user_writable "$dest_dir"; then
-        mkdir -p "$dest_dir"
-    else
-        sudo mkdir -p "$dest_dir"
-    fi
+    # Create directory if needed
+    sudo mkdir -p "$dest_dir"
     
     # Download to temp location first
     local temp_file="/tmp/fedora-cloud-download-${version}.qcow2"
@@ -446,15 +403,9 @@ download_fedora_image() {
                 log_warning "File size is small (${file_size} bytes). This might not be a complete image."
             fi
             
-            # Move file (use sudo only if directory is not user-writable)
-            if is_user_writable "$dest_dir"; then
-                mv "$temp_file" "$dest_file"
-                chmod 644 "$dest_file"
-            else
-                sudo mv "$temp_file" "$dest_file"
-                sudo chown root:root "$dest_file"
-                sudo chmod 644 "$dest_file"
-            fi
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
             log_success "Image downloaded to ${dest_file}"
         else
             log_error "Downloaded file is not a valid QCOW2 image"

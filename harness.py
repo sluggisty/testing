@@ -263,10 +263,6 @@ def create(distro: str, versions: str, specs: str, count: int, memory: int, cpus
     # Check for base images
     console.print("[dim]Checking base images...[/]")
     image_dir = config.get("host", {}).get("image_dir", "/var/lib/libvirt/images")
-    # Expand relative paths relative to testing directory
-    if not os.path.isabs(image_dir):
-        image_dir = str(SCRIPT_DIR / image_dir)
-    image_dir = os.path.expanduser(image_dir)
     missing_images = []
     
     for spec in vm_specs:
@@ -302,11 +298,18 @@ def create(distro: str, versions: str, specs: str, count: int, memory: int, cpus
     total_vms = len(vm_specs) * count
     console.print(f"\n[dim]Creating {total_vms} VMs ({count} per version)...[/]\n")
     
+    # Get image and cloudinit directories from config
+    host_config = config.get("host", {})
+    image_dir_config = host_config.get("image_dir", "/var/lib/libvirt/images")
+    cloudinit_dir_config = host_config.get("cloudinit_dir", "/tmp/snail-test-cloudinit")
+    
     env = os.environ.copy()
     env["VM_SPECS"] = ",".join(vm_specs)
     env["VM_COUNT_PER_VERSION"] = str(count)
     env["MEMORY_MB"] = str(memory)
     env["VCPUS"] = str(cpus)
+    env["IMAGE_DIR"] = image_dir_config
+    env["CLOUDINIT_DIR"] = cloudinit_dir_config
     
     result = run_command(
         ["bash", str(SCRIPTS_DIR / "create-vms.sh")],
@@ -709,10 +712,6 @@ def list_versions():
     config = load_config()
     distributions = config.get("vms", {}).get("distributions", {})
     image_dir = config.get("host", {}).get("image_dir", "/var/lib/libvirt/images")
-    # Expand relative paths relative to testing directory
-    if not os.path.isabs(image_dir):
-        image_dir = str(SCRIPT_DIR / image_dir)
-    image_dir = os.path.expanduser(image_dir)
     
     console.print()
     

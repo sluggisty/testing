@@ -17,15 +17,6 @@ IMAGE_DIR="${IMAGE_DIR:-/var/lib/libvirt/images}"
 CLOUDINIT_DIR="${CLOUDINIT_DIR:-/tmp/snail-test-cloudinit}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-${HOME}/.ssh/snail-test-key}"
 
-# Expand relative paths relative to testing directory
-if [[ "$IMAGE_DIR" != /* ]]; then
-    IMAGE_DIR="${TESTING_DIR}/${IMAGE_DIR}"
-fi
-if [[ "$CLOUDINIT_DIR" != /* ]]; then
-    CLOUDINIT_DIR="${TESTING_DIR}/${CLOUDINIT_DIR}"
-fi
-IMAGE_DIR=$(eval echo "$IMAGE_DIR")
-CLOUDINIT_DIR=$(eval echo "$CLOUDINIT_DIR")
 
 # Snail core configuration
 SNAIL_REPO="${SNAIL_REPO:-https://github.com/sluggisty/snail-core}"
@@ -54,21 +45,6 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
-
-# Check if directory is user-writable (doesn't need sudo)
-is_user_writable() {
-    local dir="$1"
-    # Expand ~ and resolve relative paths
-    dir=$(eval echo "$dir")
-    dir=$(cd "$(dirname "$dir")" 2>/dev/null && pwd)/$(basename "$dir") 2>/dev/null || echo "$dir"
-    
-    # Check if we can write to the directory (or its parent if it doesn't exist)
-    local test_dir="$dir"
-    [[ ! -d "$test_dir" ]] && test_dir="$(dirname "$test_dir")"
-    
-    [[ -w "$test_dir" ]] 2>/dev/null && return 0
-    return 1
-}
 
 # Check requirements
 check_requirements() {
@@ -502,21 +478,11 @@ create_vm() {
     local base_image
     base_image=$(get_base_image_path "$distro" "$version")
     
-    # Expand and resolve IMAGE_DIR path
-    local resolved_image_dir
-    resolved_image_dir=$(eval echo "$IMAGE_DIR")
-    resolved_image_dir=$(cd "$(dirname "$resolved_image_dir")" 2>/dev/null && pwd)/$(basename "$resolved_image_dir") 2>/dev/null || echo "$resolved_image_dir"
-    
-    # Create disk from base image (use sudo only if directory is not user-writable)
-    local disk_path="${resolved_image_dir}/${vm_name}.qcow2"
+    # Create disk from base image
+    local disk_path="${IMAGE_DIR}/${vm_name}.qcow2"
     log_info "Creating disk: ${disk_path}"
-    if is_user_writable "$resolved_image_dir"; then
-        cp "$base_image" "$disk_path"
-        qemu-img resize "$disk_path" "${DISK_SIZE_GB}G" 2>/dev/null
-    else
-        sudo cp "$base_image" "$disk_path"
-        sudo qemu-img resize "$disk_path" "${DISK_SIZE_GB}G" 2>/dev/null
-    fi
+    sudo cp "$base_image" "$disk_path"
+    sudo qemu-img resize "$disk_path" "${DISK_SIZE_GB}G" 2>/dev/null
     
     # Create cloud-init ISO
     log_info "Creating cloud-init configuration..."
