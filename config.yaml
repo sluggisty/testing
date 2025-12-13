@@ -63,6 +63,16 @@ vms:
         "20.04": "Ubuntu 20.04 LTS (Focal Fossa)"
         "18.04": "Ubuntu 18.04 LTS (Bionic Beaver)"
       default_version: "24.04"
+    
+    centos:
+      # Available CentOS versions to test
+      # Format: version: display_name
+      # CentOS Stream is the current version (9, 8), CentOS 7 is EOL
+      available_versions:
+        "9": "CentOS Stream 9"
+        "8": "CentOS Stream 8"
+        "7": "CentOS 7 (EOL)"
+      default_version: "9"
   
   # User credentials for VMs
   username: "snail"

@@ -163,6 +163,49 @@ find_ubuntu_image_name() {
     return 1
 }
 
+# Find the correct CentOS image name
+find_centos_image_name() {
+    local version="$1"
+    
+    # CentOS cloud images are at:
+    # https://cloud.centos.org/centos/{version}/x86_64/images/
+    # For CentOS Stream, use stream-{version}
+    local base_url
+    if [[ "$version" == "9" || "$version" == "8" ]]; then
+        base_url="https://cloud.centos.org/centos/${version}-stream/x86_64/images/"
+    else
+        # CentOS 7 and older
+        base_url="https://cloud.centos.org/centos/${version}/x86_64/images/"
+    fi
+    
+    # Try to find the generic cloud image (QCOW2 format)
+    local image_name
+    image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE 'CentOS-[0-9]+[^"]*GenericCloud[^"]*\.qcow2' | head -1 || true)
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        echo "$base_url" > /tmp/centos_base_url_${version}
+        return 0
+    fi
+    
+    # Fallback: try alternative naming patterns
+    for pattern in \
+        "CentOS-${version}-GenericCloud-*.qcow2" \
+        "CentOS-Stream-${version}-GenericCloud-*.qcow2" \
+        "CentOS-${version}-x86_64-GenericCloud-*.qcow2"; do
+        
+        local found_name
+        found_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE "$(echo "$pattern" | sed 's/\*/[^"]*/g')" | head -1 || true)
+        if [[ -n "$found_name" ]]; then
+            echo "$found_name"
+            echo "$base_url" > /tmp/centos_base_url_${version}
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Find the correct image name from Fedora's directory listing
 find_fedora_image_name() {
     local version="$1"
@@ -630,7 +673,7 @@ main() {
                 echo "Usage: $0 [--distro DISTRO] [--version VERSION] [--dir DIRECTORY]"
                 echo ""
                 echo "Options:"
-                echo "  --distro, -d     Distribution: fedora, debian, or ubuntu (default: fedora)"
+                echo "  --distro, -d     Distribution: fedora, debian, ubuntu, or centos (default: fedora)"
                 echo "  --version, -v    Version number (default: 42 for fedora, 12 for debian)"
                 echo "  --dir            Image directory (default: /var/lib/libvirt/images)"
                 echo ""
@@ -638,6 +681,7 @@ main() {
                 echo "  $0 --distro fedora --version 42"
                 echo "  $0 --distro debian --version 12"
                 echo "  $0 --distro ubuntu --version 24.04"
+                echo "  $0 --distro centos --version 9"
                 exit 0
                 ;;
             *)
@@ -650,9 +694,9 @@ main() {
     # Normalize distro name
     DISTRO=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
     
-    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" ]]; then
+    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" && "$DISTRO" != "centos" ]]; then
         log_error "Unsupported distribution: $DISTRO"
-        log_info "Supported distributions: fedora, debian, ubuntu"
+        log_info "Supported distributions: fedora, debian, ubuntu, centos"
         exit 1
     fi
     
@@ -677,6 +721,11 @@ main() {
         verify_image "${IMAGE_DIR}/ubuntu-cloud-base-${version_key}.qcow2"
         log_success "Ubuntu base image setup complete!"
         echo "Base image location: ${IMAGE_DIR}/ubuntu-cloud-base-${version_key}.qcow2"
+    elif [[ "$DISTRO" == "centos" ]]; then
+        download_centos_image "$VERSION" "$IMAGE_DIR"
+        verify_image "${IMAGE_DIR}/centos-cloud-base-${VERSION}.qcow2"
+        log_success "CentOS base image setup complete!"
+        echo "Base image location: ${IMAGE_DIR}/centos-cloud-base-${VERSION}.qcow2"
     else
         log_error "Unsupported distribution: $DISTRO"
         exit 1
