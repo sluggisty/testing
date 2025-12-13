@@ -106,6 +106,63 @@ find_debian_image_name() {
     return 1
 }
 
+# Find the correct Ubuntu image name
+find_ubuntu_image_name() {
+    local version="$1"
+    
+    # Ubuntu version to codename mapping
+    local codename
+    case "$version" in
+        "24.04")
+            codename="noble"
+            ;;
+        "23.10")
+            codename="mantic"
+            ;;
+        "23.04")
+            codename="lunar"
+            ;;
+        "22.04")
+            codename="jammy"
+            ;;
+        "20.04")
+            codename="focal"
+            ;;
+        "18.04")
+            codename="bionic"
+            ;;
+        *)
+            log_error "Unsupported Ubuntu version: $version"
+            return 1
+            ;;
+    esac
+    
+    # Ubuntu cloud images are at:
+    # https://cloud-images.ubuntu.com/{codename}/current/
+    local base_url="https://cloud-images.ubuntu.com/${codename}/current/"
+    
+    # Try to find the KVM-optimized image first (recommended for libvirt)
+    local image_name
+    image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE "${codename}-server-cloudimg-amd64-disk-kvm\.img" | head -1 || true)
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        echo "$base_url" > /tmp/ubuntu_base_url_${version//./_}
+        return 0
+    fi
+    
+    # Fallback: try standard image (not KVM-optimized)
+    image_name=$(curl -sL "$base_url" 2>/dev/null | grep -oE "${codename}-server-cloudimg-amd64\.img" | head -1 || true)
+    
+    if [[ -n "$image_name" ]]; then
+        echo "$image_name"
+        echo "$base_url" > /tmp/ubuntu_base_url_${version//./_}
+        return 0
+    fi
+    
+    return 1
+}
+
 # Find the correct image name from Fedora's directory listing
 find_fedora_image_name() {
     local version="$1"
@@ -310,6 +367,112 @@ download_debian_image() {
     fi
 }
 
+# Download Ubuntu cloud image
+download_ubuntu_image() {
+    local version="$1"
+    local dest_dir="$2"
+    # Ubuntu images use .img extension but are QCOW2 format
+    # We'll rename to .qcow2 for consistency
+    local dest_file="${dest_dir}/ubuntu-cloud-base-${version//./_}.qcow2"
+    
+    if [[ -f "$dest_file" ]]; then
+        log_warning "Base image already exists at ${dest_file}"
+        read -p "Do you want to re-download? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Using existing image"
+            return 0
+        fi
+    fi
+    
+    log_info "Finding Ubuntu ${version} cloud image..."
+    
+    # Find the correct image name
+    local image_name
+    if ! image_name=$(find_ubuntu_image_name "$version"); then
+        log_error "Could not find Ubuntu ${version} cloud image"
+        log_info "This version may be too old or no longer available."
+        log_info "Try a different version with: $0 --distro ubuntu --version 24.04"
+        log_info "Or check: https://cloud-images.ubuntu.com/"
+        exit 1
+    fi
+    
+    # Get base URL from temp file (set by find_ubuntu_image_name)
+    local base_url
+    local version_key="${version//./_}"
+    if [[ -f "/tmp/ubuntu_base_url_${version_key}" ]]; then
+        base_url=$(cat "/tmp/ubuntu_base_url_${version_key}")
+        rm -f "/tmp/ubuntu_base_url_${version_key}"
+    else
+        # Fallback: construct URL from version
+        local codename=""
+        case "$version" in
+            "24.04") codename="noble" ;;
+            "22.04") codename="jammy" ;;
+            "20.04") codename="focal" ;;
+            "18.04") codename="bionic" ;;
+        esac
+        base_url="https://cloud-images.ubuntu.com/${codename}/current/"
+    fi
+    
+    local download_url="${base_url}${image_name}"
+    
+    log_info "Found image: ${image_name}"
+    log_info "Downloading from: ${download_url}"
+    
+    # Create directory if needed
+    sudo mkdir -p "$dest_dir"
+    
+    # Download to temp location first
+    local temp_file="/tmp/ubuntu-cloud-download-${version//./_}.img"
+    
+    # Use curl with better progress and redirect following
+    if curl -L --progress-bar -f -o "$temp_file" "$download_url" 2>&1; then
+        # Verify it's a valid qcow2 image (Ubuntu uses .img but it's QCOW2 format)
+        local file_size
+        file_size=$(stat -f%z "$temp_file" 2>/dev/null || stat -c%s "$temp_file" 2>/dev/null || echo "0")
+        
+        # Check if it's HTML (error page)
+        if head -c 100 "$temp_file" | grep -q "<html\|<!DOCTYPE\|404\|Not Found\|Error"; then
+            log_error "Downloaded file appears to be an HTML error page"
+            log_info "The image may not be available for Ubuntu ${version}"
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        # Check QCOW2 magic bytes (Ubuntu .img files are actually QCOW2)
+        local magic_bytes
+        magic_bytes=$(head -c 4 "$temp_file" | od -An -tx1 | tr -d ' \n' || echo "")
+        local is_qcow2=false
+        if [[ "$magic_bytes" == "514649fb" ]]; then
+            is_qcow2=true
+        fi
+        
+        if [[ "$is_qcow2" == "true" ]]; then
+            if [[ $file_size -lt 104857600 ]]; then
+                log_warning "File size is small (${file_size} bytes). This might not be a complete image."
+            fi
+            
+            sudo mv "$temp_file" "$dest_file"
+            sudo chown root:root "$dest_file"
+            sudo chmod 644 "$dest_file"
+            log_success "Image downloaded to ${dest_file}"
+        else
+            log_error "Downloaded file is not a valid QCOW2 image"
+            log_info "Magic bytes: ${magic_bytes} (expected: 514649fb)"
+            log_info "File type: $(file "$temp_file" || echo 'unknown')"
+            log_info "The file might be an error page or corrupted download."
+            rm -f "$temp_file"
+            exit 1
+        fi
+    else
+        log_error "Failed to download image"
+        log_info "URL might be incorrect or the file is no longer available"
+        rm -f "$temp_file"
+        exit 1
+    fi
+}
+
 # Download Fedora cloud image
 download_fedora_image() {
     local version="$1"
@@ -467,13 +630,14 @@ main() {
                 echo "Usage: $0 [--distro DISTRO] [--version VERSION] [--dir DIRECTORY]"
                 echo ""
                 echo "Options:"
-                echo "  --distro, -d     Distribution: fedora or debian (default: fedora)"
+                echo "  --distro, -d     Distribution: fedora, debian, or ubuntu (default: fedora)"
                 echo "  --version, -v    Version number (default: 42 for fedora, 12 for debian)"
                 echo "  --dir            Image directory (default: /var/lib/libvirt/images)"
                 echo ""
                 echo "Examples:"
                 echo "  $0 --distro fedora --version 42"
                 echo "  $0 --distro debian --version 12"
+                echo "  $0 --distro ubuntu --version 24.04"
                 exit 0
                 ;;
             *)
@@ -486,9 +650,9 @@ main() {
     # Normalize distro name
     DISTRO=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
     
-    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" ]]; then
+    if [[ "$DISTRO" != "fedora" && "$DISTRO" != "debian" && "$DISTRO" != "ubuntu" ]]; then
         log_error "Unsupported distribution: $DISTRO"
-        log_info "Supported distributions: fedora, debian"
+        log_info "Supported distributions: fedora, debian, ubuntu"
         exit 1
     fi
     
@@ -505,9 +669,17 @@ main() {
     elif [[ "$DISTRO" == "debian" ]]; then
         download_debian_image "$VERSION" "$IMAGE_DIR"
         verify_image "${IMAGE_DIR}/debian-cloud-base-${VERSION}.qcow2"
-        log_success "Base image setup complete!"
-        echo ""
+        log_success "Debian base image setup complete!"
         echo "Base image location: ${IMAGE_DIR}/debian-cloud-base-${VERSION}.qcow2"
+    elif [[ "$DISTRO" == "ubuntu" ]]; then
+        download_ubuntu_image "$VERSION" "$IMAGE_DIR"
+        local version_key="${VERSION//./_}"
+        verify_image "${IMAGE_DIR}/ubuntu-cloud-base-${version_key}.qcow2"
+        log_success "Ubuntu base image setup complete!"
+        echo "Base image location: ${IMAGE_DIR}/ubuntu-cloud-base-${version_key}.qcow2"
+    else
+        log_error "Unsupported distribution: $DISTRO"
+        exit 1
     fi
 }
 
