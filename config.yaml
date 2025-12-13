@@ -6,7 +6,7 @@ vms:
   # Number of VMs per version
   count_per_version: 5
   
-  # VM name prefix (will be suffixed with version and number, e.g., snail-test-42-1)
+  # VM name prefix (will be suffixed with distro-version-number, e.g., snail-test-fedora-42-1)
   name_prefix: "snail-test"
   
   # Resources per VM
@@ -14,25 +14,44 @@ vms:
   vcpus: 2
   disk_size_gb: 15
   
-  # Available Fedora versions to test
-  # Format: version: display_name
-  # Note: Older versions may not have cloud images available
-  # Fedora typically maintains releases for ~13 months
-  # Cloud images for versions < 38 may be in archives or unavailable
-  available_versions:
-    42: "Fedora 42 (Current)"
-    41: "Fedora 41"
-    40: "Fedora 40 (may be archived)"
-    39: "Fedora 39 (may be archived)"
-    38: "Fedora 38 (may be archived)"
-    37: "Fedora 37 (archived)"
-    36: "Fedora 36 (archived)"
-    35: "Fedora 35 (archived)"
-    34: "Fedora 34 (archived)"
-    33: "Fedora 33 (may not be available)"
+  # Default distribution to use (if not specified via command line)
+  default_distribution: "fedora"
   
   # Default versions to create (if not specified via command line)
-  default_versions: [42]
+  # Format: "distro:version" or just "version" (uses default_distribution)
+  default_versions: ["fedora:42"]
+  
+  # Available distributions and their versions
+  distributions:
+    fedora:
+      # Available Fedora versions to test
+      # Format: version: display_name
+      # Note: Older versions may not have cloud images available
+      # Fedora typically maintains releases for ~13 months
+      # Cloud images for versions < 38 may be in archives or unavailable
+      available_versions:
+        42: "Fedora 42 (Current)"
+        41: "Fedora 41"
+        40: "Fedora 40 (may be archived)"
+        39: "Fedora 39 (may be archived)"
+        38: "Fedora 38 (may be archived)"
+        37: "Fedora 37 (archived)"
+        36: "Fedora 36 (archived)"
+        35: "Fedora 35 (archived)"
+        34: "Fedora 34 (archived)"
+        33: "Fedora 33 (may not be available)"
+      default_version: 42
+    
+    debian:
+      # Available Debian versions to test
+      # Format: version: display_name
+      # Debian releases are named (bookworm, bullseye, etc.) and have numeric versions
+      available_versions:
+        "12": "Debian 12 (Bookworm)"
+        "11": "Debian 11 (Bullseye)"
+        "10": "Debian 10 (Buster)"
+        "9": "Debian 9 (Stretch)"
+      default_version: "12"
   
   # User credentials for VMs
   username: "snail"
@@ -71,14 +90,17 @@ snail_core:
 
 # Host Settings
 host:
-  # Path to store VM images
-  image_dir: "/var/lib/libvirt/images"
+  # Path to store VM images (user-writable directory)
+  # Images will be stored in: <testing_dir>/images/
+  image_dir: "./images"
   
-  # Path to store cloud-init ISOs
-  cloudinit_dir: "/tmp/snail-test-cloudinit"
+  # Path to store cloud-init ISOs (user-writable directory)
+  # Cloud-init ISOs will be stored in: <testing_dir>/cloudinit/
+  cloudinit_dir: "./cloudinit"
   
   # Path to base Fedora cloud image (will be downloaded if not exists)
-  base_image_path: "/var/lib/libvirt/images/fedora-cloud-base.qcow2"
+  # This is now relative to image_dir above
+  base_image_path: "./images/fedora-cloud-base.qcow2"
 
 # Paths (relative to testing directory)
 paths:

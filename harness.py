@@ -145,21 +145,36 @@ def get_vm_list() -> list[str]:
     vms = []
     for line in result.stdout.strip().split("\n"):
         line = line.strip()
-        # Match pattern: snail-test-<version>-<number>
+        # Match pattern: snail-test-<distro>-<version>-<number> or snail-test-<version>-<number> (legacy)
         if line.startswith(prefix) and "-" in line[len(prefix):]:
             vms.append(line)
     
-    # Sort by version then number
+    # Sort by distro, version, then number
     def sort_key(vm_name: str) -> tuple:
         parts = vm_name.split("-")
-        if len(parts) >= 3:
+        if len(parts) >= 4:
+            # New format: prefix-distro-version-number
+            try:
+                distro = parts[-3]
+                version = parts[-2]
+                number = int(parts[-1])
+                # Convert version to int if possible for sorting
+                try:
+                    version_num = int(version)
+                except ValueError:
+                    version_num = 0
+                return (distro, version_num, number)
+            except (ValueError, IndexError):
+                pass
+        elif len(parts) >= 3:
+            # Legacy format: prefix-version-number
             try:
                 version = int(parts[-2])
                 number = int(parts[-1])
-                return (version, number)
+                return ("fedora", version, number)  # Assume fedora for legacy
             except ValueError:
-                return (0, 0)
-        return (0, 0)
+                pass
+        return ("", 0, 0)
     
     return sorted(vms, key=sort_key, reverse=True)
 
@@ -210,53 +225,85 @@ def cli():
 
 
 @cli.command()
-@click.option("--versions", "-v", help="Comma-separated Fedora versions (e.g., 42,41,40). Default: 42")
+@click.option("--distro", "-d", help="Distribution: fedora or debian (default: fedora)")
+@click.option("--versions", "-v", help="Comma-separated versions (e.g., 42,41,40 for fedora or 12,11 for debian)")
+@click.option("--specs", "-s", help="VM specs in format 'distro:version' (e.g., 'fedora:42,debian:12')")
 @click.option("--count", "-n", default=5, help="Number of VMs per version (default: 5)")
 @click.option("--memory", "-m", default=2048, help="Memory per VM in MB")
 @click.option("--cpus", "-c", default=2, help="vCPUs per VM")
-def create(versions: str, count: int, memory: int, cpus: int):
-    """Create test VMs for specified Fedora versions."""
+def create(distro: str, versions: str, specs: str, count: int, memory: int, cpus: int):
+    """Create test VMs for specified distributions and versions."""
     console.print(Panel.fit(
         "[bold blue]Creating Snail Core Test VMs[/]",
         border_style="blue"
     ))
     
     config = load_config()
+    default_distro = config.get("vms", {}).get("default_distribution", "fedora")
     
-    # Determine which versions to use
-    if not versions:
-        versions = ",".join(map(str, config.get("vms", {}).get("default_versions", [42])))
+    # Build VM specs
+    vm_specs = []
     
-    version_list = [v.strip() for v in versions.split(",")]
-    console.print(f"\n[dim]Fedora versions: {', '.join(version_list)}[/]")
+    if specs:
+        # Use explicit specs format: "fedora:42,debian:12"
+        vm_specs = [s.strip() for s in specs.split(",")]
+    elif versions:
+        # Use versions with optional distro
+        distro_to_use = distro or default_distro
+        version_list = [v.strip() for v in versions.split(",")]
+        vm_specs = [f"{distro_to_use}:{v}" for v in version_list]
+    else:
+        # Use defaults from config
+        default_versions = config.get("vms", {}).get("default_versions", ["fedora:42"])
+        vm_specs = [str(v) for v in default_versions]
+    
+    console.print(f"\n[dim]VM specs: {', '.join(vm_specs)}[/]")
     console.print(f"[dim]VMs per version: {count}[/]\n")
     
     # Check for base images
     console.print("[dim]Checking base images...[/]")
     image_dir = config.get("host", {}).get("image_dir", "/var/lib/libvirt/images")
+    # Expand relative paths relative to testing directory
+    if not os.path.isabs(image_dir):
+        image_dir = str(SCRIPT_DIR / image_dir)
+    image_dir = os.path.expanduser(image_dir)
     missing_images = []
     
-    for version in version_list:
-        base_image = Path(image_dir) / f"fedora-cloud-base-{version}.qcow2"
+    for spec in vm_specs:
+        # Parse spec (format: "distro:version" or just "version")
+        if ":" in spec:
+            spec_distro, spec_version = spec.split(":", 1)
+        else:
+            spec_distro = default_distro
+            spec_version = spec
+        
+        if spec_distro == "fedora":
+            base_image = Path(image_dir) / f"fedora-cloud-base-{spec_version}.qcow2"
+        elif spec_distro == "debian":
+            base_image = Path(image_dir) / f"debian-cloud-base-{spec_version}.qcow2"
+        else:
+            console.print(f"[red]Unknown distribution: {spec_distro}[/]")
+            sys.exit(1)
+        
         if not base_image.exists():
-            missing_images.append(version)
-            console.print(f"[yellow]Base image missing for Fedora {version}[/]")
+            missing_images.append((spec_distro, spec_version))
+            console.print(f"[yellow]Base image missing for {spec_distro} {spec_version}[/]")
     
     if missing_images:
         console.print(f"\n[yellow]Downloading missing base images...[/]\n")
-        for version in missing_images:
+        for spec_distro, spec_version in missing_images:
             try:
-                run_script("setup-base-image.sh", ["--version", version], capture=False)
+                run_script("setup-base-image.sh", ["--distro", spec_distro, "--version", spec_version], capture=False)
             except subprocess.CalledProcessError:
-                console.print(f"[red]Failed to download base image for Fedora {version}[/]")
+                console.print(f"[red]Failed to download base image for {spec_distro} {spec_version}[/]")
                 sys.exit(1)
     
     # Create VMs
-    total_vms = len(version_list) * count
+    total_vms = len(vm_specs) * count
     console.print(f"\n[dim]Creating {total_vms} VMs ({count} per version)...[/]\n")
     
     env = os.environ.copy()
-    env["FEDORA_VERSIONS"] = versions
+    env["VM_SPECS"] = ",".join(vm_specs)
     env["VM_COUNT_PER_VERSION"] = str(count)
     env["MEMORY_MB"] = str(memory)
     env["VCPUS"] = str(cpus)
@@ -658,26 +705,74 @@ def ips():
 
 @cli.command("list-versions")
 def list_versions():
-    """List available Fedora versions and their status."""
+    """List available distributions and their versions."""
     config = load_config()
-    available = config.get("vms", {}).get("available_versions", {})
+    distributions = config.get("vms", {}).get("distributions", {})
     image_dir = config.get("host", {}).get("image_dir", "/var/lib/libvirt/images")
+    # Expand relative paths relative to testing directory
+    if not os.path.isabs(image_dir):
+        image_dir = str(SCRIPT_DIR / image_dir)
+    image_dir = os.path.expanduser(image_dir)
     
     console.print()
-    table = Table(title="Available Fedora Versions")
-    table.add_column("Version", style="cyan")
-    table.add_column("Name", style="green")
-    table.add_column("Base Image", justify="center")
     
-    for version, name in sorted(available.items(), reverse=True):
-        base_image = Path(image_dir) / f"fedora-cloud-base-{version}.qcow2"
-        status = "[green]✓[/]" if base_image.exists() else "[red]✗[/]"
-        table.add_row(str(version), name, status)
+    # Show Fedora versions
+    if "fedora" in distributions:
+        fedora_versions = distributions["fedora"].get("available_versions", {})
+        table = Table(title="Available Fedora Versions")
+        table.add_column("Version", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Base Image", justify="center")
+        
+        # Sort by version number (handle both int and string keys)
+        def sort_key(item):
+            version = item[0]
+            if isinstance(version, int):
+                return version
+            elif isinstance(version, str) and version.isdigit():
+                return int(version)
+            else:
+                return 0
+        
+        for version, name in sorted(fedora_versions.items(), key=sort_key, reverse=True):
+            base_image = Path(image_dir) / f"fedora-cloud-base-{version}.qcow2"
+            status = "[green]✓[/]" if base_image.exists() else "[red]✗[/]"
+            table.add_row(str(version), name, status)
+        
+        console.print(table)
+        console.print()
     
-    console.print(table)
-    console.print()
-    console.print("[dim]Use --versions option when creating VMs to select specific versions[/]")
-    console.print("[dim]Example: ./harness.py create --versions 42,41,40,39[/]")
+    # Show Debian versions
+    if "debian" in distributions:
+        debian_versions = distributions["debian"].get("available_versions", {})
+        table = Table(title="Available Debian Versions")
+        table.add_column("Version", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Base Image", justify="center")
+        
+        # Sort by version number (handle both int and string keys)
+        def sort_key(item):
+            version = item[0]
+            if isinstance(version, int):
+                return version
+            elif isinstance(version, str) and version.isdigit():
+                return int(version)
+            else:
+                return 0
+        
+        for version, name in sorted(debian_versions.items(), key=sort_key, reverse=True):
+            base_image = Path(image_dir) / f"debian-cloud-base-{version}.qcow2"
+            status = "[green]✓[/]" if base_image.exists() else "[red]✗[/]"
+            table.add_row(str(version), name, status)
+        
+        console.print(table)
+        console.print()
+    
+    console.print("[dim]Use --specs option when creating VMs to select specific versions[/]")
+    console.print("[dim]Examples:[/]")
+    console.print("[dim]  ./harness.py create --specs fedora:42,41[/]")
+    console.print("[dim]  ./harness.py create --specs debian:12,11[/]")
+    console.print("[dim]  ./harness.py create --specs fedora:42,debian:12[/]")
 
 
 @cli.group()
